@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tera-backend"
+version = "0.1.0"
+description = "Tera — hybrid cuff-referenced home blood-pressure monitoring backend"
+requires-python = ">=3.11"
+
+# Every dependency carries a one-line justification (working convention, BUILD_SPEC section 7).
+dependencies = [
+    "fastapi>=0.115",          # mandated stack
+    "uvicorn[standard]>=0.32", # ASGI server for local run and the Compose api service
+    "sqlalchemy>=2.0.36",      # mandated stack
+    "alembic>=1.14",           # mandated stack
+    "psycopg[binary]>=3.2",    # Postgres driver; psycopg3 is the current generation and ships wheels
+    "pydantic>=2.9",           # mandated stack
+    "pydantic-settings>=2.6",  # env-var settings binding, so no threshold is ever a literal in code
+    "pyjwt>=2.9",              # JWT access/refresh tokens (BUILD_SPEC 4.5); no server-side session store needed
+    "bcrypt>=4.2",             # password hashing for the OAuth2 password grant
+    "python-multipart>=0.0.17", # required by FastAPI for OAuth2 form-encoded token requests
+    "httpx>=0.27",             # replay CLI posts through the real HTTP API; also the test client transport
+    "typer>=0.15",             # the two mandated CLIs (seed-demo, replay) need argument parsing
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",             # mandated test runner
+    "pytest-asyncio>=0.24",    # a few endpoint tests exercise async paths directly
+    "anyio>=4.6",              # httpx ASGI transport dependency for in-process API tests
+]
+
+[project.scripts]
+tera-seed-demo = "app.cli.seed_demo:entrypoint"
+tera-replay = "app.cli.replay:entrypoint"
+tera-docs = "app.cli.gen_docs:entrypoint"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "invariant: maps to a non-negotiable invariant in BUILD_SPEC section 2",
+]
+filterwarnings = ["error::DeprecationWarning:app.*"]

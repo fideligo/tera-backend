@@ -1,0 +1,26 @@
+{
+  "_about": "SYNTHETIC rejected session for `tera-replay`. Demonstrates invariant 3: a session the device could not use is still submitted, still stored, and still appears in the timeline and the clinician summary.",
+  "_usage": "tera-replay samples/session_rejected.json --username demo.patient@tera.invalid --password <TERA_DEMO_PATIENT_PASSWORD>",
+
+  "session_id": null,
+  "episode_id": null,
+  "device_profile_id": null,
+  "model_version": "tera-scg-ppg-0.1.0-synthetic",
+  "started_at": null,
+  "posture": "seated",
+  "status": "rejected",
+  "rejection_reason": "excessive_motion",
+  "n_beats_total": 22,
+  "n_beats_usable": 6,
+  "ptt_ms": [249.8, 261.2, 238.4, 255.9, 244.1, 258.6],
+  "quality": {
+    "accel_rate_hz": 199.8,
+    "camera_fps": 57.9,
+    "dropped_frame_pct": 4.8,
+    "snr_db": 5.1,
+    "motion_index": 0.84,
+    "clock_offset_ms": 2.3
+  },
+  "calibration_id": null,
+  "synthetic": true
+}

@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: tera
+      POSTGRES_PASSWORD: tera_dev_password
+      POSTGRES_DB: tera
+    ports:
+      - "5434:5432"   # 5434 on the host: 5432/5433 are commonly taken by other local Postgres instances
+    volumes:
+      - tera_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tera -d tera"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      TERA_DATABASE_URL: postgresql+psycopg://tera:tera_dev_password@db:5432/tera
+      TERA_TEST_DATABASE_URL: postgresql+psycopg://tera:tera_dev_password@db:5432/tera_test
+      TERA_ENV: development
+      TERA_LOG_LEVEL: INFO
+      # Development-only value. Production supplies TERA_JWT_SECRET from the environment;
+      # app startup refuses to run with the built-in default when TERA_ENV=production.
+      TERA_JWT_SECRET: dev-only-compose-secret-not-for-production
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    # Migrations run from empty on every start, so `docker compose up` on a fresh volume gives
+    # a working API with no manual step.
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  tera_pgdata:

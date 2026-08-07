@@ -1,0 +1,36 @@
+# Secrets — only .env.example is committed (BUILD_SPEC 4.5)
+.env
+*.env
+.env.local
+.env.*.local
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node (Phase 2)
+node_modules/
+.next/
+out/
+
+# Flutter (Phase 3)
+.dart_tool/
+.flutter-plugins*
+**/build/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
