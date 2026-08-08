@@ -116,7 +116,11 @@ class AuditLog(UuidPkMixin, Base):
     __tablename__ = "audit_log"
 
     actor: Mapped[str] = mapped_column(sa.String(128), nullable=False, index=True)
-    role: Mapped[UserRole] = mapped_column(enum_column(UserRole, "user_role"), nullable=False)
+    #: Null means the actor was not authenticated. A failed login against an account that does
+    #: not exist has no role, and inventing one would put a false claim in an append-only log.
+    role: Mapped[UserRole | None] = mapped_column(
+        enum_column(UserRole, "user_role"), nullable=True
+    )
     action: Mapped[AuditAction] = mapped_column(
         enum_column(AuditAction, "audit_action"), nullable=False, index=True
     )

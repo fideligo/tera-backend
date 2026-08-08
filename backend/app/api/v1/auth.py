@@ -55,6 +55,13 @@ def issue_tokens(
     # Same response for an unknown subject and a wrong password, so the endpoint cannot be used
     # to enumerate accounts.
     if user is None or not verify_password(form.password, user.password_hash):
+        # Recorded whether or not the account exists. Failures against accounts that do not
+        # exist are the signature of credential stuffing, and dropping them would blind the
+        # audit trail to the attack it most needs to show.
+        audit.record_unauthenticated(
+            db, actor=form.username, action=AuditAction.AUTH_LOGIN_FAILED
+        )
+        db.commit()
         log.info("auth_failed", extra={"subject_present": user is not None})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -117,15 +124,26 @@ def refresh_tokens(
             db, jti=principal.jti, user_id=user.id, expires_at=expires_at
         )
     except refresh_token_service.RefreshTokenError as exc:
-        db.commit()  # the family revocation, if any, must survive the failed request
         if exc.family_revoked:
+            # A security incident, not an ordinary expiry: someone replayed a token that had
+            # already been rotated. Recorded distinctly so it can be found later.
+            audit.record(
+                db,
+                principal=principal,
+                action=AuditAction.AUTH_REFRESH_REUSE_DETECTED,
+                target=user.id,
+            )
             log.warning(
                 "refresh_token_family_revoked",
                 extra={"user_id": str(user.id), "reason": "reuse_or_mismatch"},
             )
+        db.commit()  # the family revocation and its audit entry must survive the failed request
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=exc.message) from exc
 
     tokens = _mint(_principal_for(user), settings, refresh_jti=issued.jti)
+    audit.record(
+        db, principal=principal, action=AuditAction.AUTH_TOKEN_REFRESHED, target=user.id
+    )
     db.commit()
     return tokens
 
