@@ -796,6 +796,68 @@ The history is preserved where it matters: `refresh_token` is mutable current st
 
 ---
 
+## Pending: Postgres-backed rate limiting (C5, not yet implemented)
+
+Recorded before implementation so the reasoning is not re-derived. **Deferred deliberately**:
+the judged demo is a working product on screen, and rate-limiting depth is correct work at the
+wrong time. This entry is the design, not a description of shipped code.
+
+### Why the current limiter is not sufficient
+
+`FixedWindowRateLimiter` holds counters in process memory. With N API workers the effective
+ceiling is N times the configured one. That is tolerable on the ingest endpoints; it is not on
+the auth endpoints, where the ceiling *is* the brute-force defence.
+
+### Design
+
+One table, following the `session_nonce` precedent — a second datastore is not justified when
+Postgres is already there:
+
+```
+rate_limit_counter
+  id, bucket, subject_key, window_start, count
+  UNIQUE (bucket, subject_key, window_start)
+```
+
+Increment atomically across processes in a single statement, so two workers cannot both read a
+count below the limit and both allow the request:
+
+```sql
+INSERT INTO rate_limit_counter (bucket, subject_key, window_start, count)
+VALUES (:bucket, :key, :window, 1)
+ON CONFLICT (bucket, subject_key, window_start)
+DO UPDATE SET count = rate_limit_counter.count + 1
+RETURNING count
+```
+
+### Keys per endpoint
+
+"Per-token and per-patient" cannot apply at login: there is no token yet, and which patient is
+meant is not yet known. The meaningful keys differ by endpoint.
+
+| Endpoint | Keys |
+|---|---|
+| `POST /v1/auth/token` | attempted username, and client address |
+| `POST /v1/auth/refresh` | **refresh-token family**, and client address |
+| `register`, `logout`, `me` | per-token, and per-patient where one is in scope |
+
+**Family keying on refresh is the precise defence.** `family_id` already represents exactly one
+login, and reuse detection (C1) already operates at that granularity, so the unit is available
+and meaningful. Client address alone fails behind NAT and CGNAT, where an attacker shares an
+address with legitimate users and a per-address limit either lets the attack through or locks
+out the bystanders. Coarse per-address plus precise per-family gives both.
+
+**On repeated breach of the family limit, revoke the family.** A client hammering refresh with
+one family's tokens is either broken or hostile; in both cases ending that login is the correct
+response, and `revoke_family` already exists.
+
+### Thresholds
+
+All from `SecuritySettings` via pydantic-settings, never literals — the existing
+`ingest_rate_limit_*` fields are the pattern to follow.
+
+---
+
 ## Environment notes
 
 The Compose Postgres publishes on host port **5434**, not 5432 or 5433 — both were already taken
