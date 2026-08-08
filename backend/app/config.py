@@ -185,13 +185,22 @@ class DeviceEligibilitySettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="TERA_DEVICE_")
 
-    # The PTT differences Tera must resolve are on the order of a few milliseconds to a few tens
-    # of milliseconds. 200 Hz accelerometer sampling gives 5 ms resolution on the SCG fiducial
-    # point; 100 Hz gives 10 ms, which is usable but coarse relative to the effect size, hence
-    # the provisional band. Android caps sensors at 200 Hz without HIGH_SAMPLING_RATE_SENSORS
-    # (Android 12+), which is why the qualified band sits at that cap.
-    accel_rate_qualified_hz: float = 200.0
-    accel_rate_provisional_hz: float = 100.0
+    # Source: proposal page 7 — minimum 200 Hz, target 500 Hz, with non-compliant handsets
+    # "excluded at onboarding rather than permitted to produce estimates whose error exceeds the
+    # signal". The proposal's own measured figure is the argument: jitter is 10.6 ms at 100 Hz
+    # against a signal carried in 10–50 ms shifts, so below the floor the timing error is larger
+    # than the effect being measured, and no downstream processing recovers that.
+    #
+    # 200 Hz is therefore a floor, not a target. It is the point below which the method stops
+    # meaning anything; a handset sitting just above it is not "qualified", it is usable with a
+    # stated caveat. 500 Hz is where the sample interval stops being a leading error term.
+    #
+    # Consequence worth stating plainly: Android caps sensor delivery at 200 Hz unless the app
+    # holds HIGH_SAMPLING_RATE_SENSORS (Android 12+), so **most handsets will land in the
+    # provisional band**. Provisional therefore has to read as a normal, workable outcome rather
+    # than a warning, and it gates nothing — see test_provisional_status_gates_nothing.
+    accel_rate_qualified_hz: float = 500.0
+    accel_rate_provisional_hz: float = 200.0
 
     # Camera frame interval bounds PPG timing resolution: 30 fps is 33 ms per frame, so pulse
     # arrival is interpolated between frames rather than read off directly. 60 fps halves that
@@ -244,6 +253,38 @@ class SecuritySettings(BaseSettings):
     ingest_rate_limit_per_patient_per_hour: int = 60
     summary_rate_limit_per_token_per_hour: int = 120
     nonce_rate_limit_per_token_per_hour: int = 120
+
+    # ---------------------------------------------------------------- auth endpoint limits
+    #
+    # These are the brute-force defence, so unlike the ceilings above they are deliberately close
+    # to legitimate use, and they are enforced across processes (see app/security/authlimit.py).
+    #
+    # Login, keyed on the attempted username: a person who has forgotten their password tries a
+    # handful of times and then asks the clinic. Ten in fifteen minutes is generous for that and
+    # cuts an online guessing attack to roughly 960 attempts a day against one account, which is
+    # useless against any password worth the name.
+    auth_login_limit_per_username: int = 10
+    auth_login_window_seconds: int = 900
+
+    # Login, keyed on client address, and necessarily looser: behind NAT or CGNAT one address is
+    # a whole building. Set high enough that a school or clinic sharing an address is not locked
+    # out, low enough to bound username-spraying from a single host.
+    auth_login_limit_per_address: int = 60
+    auth_login_address_window_seconds: int = 900
+
+    # Refresh, keyed on the token family. One family is one login, and a well-behaved client
+    # refreshes roughly once per access-token lifetime — four times an hour at a 15-minute TTL.
+    # Twenty an hour absorbs retries and clock skew without absorbing a loop.
+    auth_refresh_limit_per_family: int = 20
+    auth_refresh_window_seconds: int = 3600
+
+    # How far past the family limit is treated as abuse rather than a bug. A broken client
+    # retrying a few times over should not lose its session; one that keeps going past this has
+    # stopped being plausibly accidental, and the family is revoked.
+    auth_refresh_breach_revoke_threshold: int = 20
+
+    auth_refresh_limit_per_address: int = 120
+    auth_refresh_address_window_seconds: int = 3600
 
 
 class Settings(BaseSettings):

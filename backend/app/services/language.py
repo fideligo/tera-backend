@@ -27,6 +27,15 @@ CUFF_BADGE = "CONFIRMED — UPPER-ARM CUFF"
 REJECTED_BADGE = "SESSION NOT USABLE"
 SYNTHETIC_BADGE = "SYNTHETIC DEMONSTRATION DATA — NOT A REAL MEASUREMENT"
 
+#: Device profiles need their own wording. Invariant 9 singles them out — "never invent device
+#: benchmark results" — because a seeded profile is the one synthetic record that reads as a
+#: hardware benchmark: "204.8 Hz" looks like something somebody measured on a bench. The generic
+#: badge says the row is not a measurement *from a person*, which is the wrong reassurance here.
+#: This says what the numbers actually are.
+SYNTHETIC_DEVICE_PROFILE_NOTICE = (
+    "SYNTHETIC SEED DATA — ILLUSTRATIVE OF UI STATES, NOT MEASURED PERFORMANCE"
+)
+
 # --------------------------------------------------------------------------- estimate wording
 
 #: BUILD_SPEC 5.2 gives this wording. Note what it does *not* say: nothing about whether the

@@ -54,6 +54,9 @@ ALL_TABLES = (
     "medication_event", "symptom_event", "red_flag_event", "calibration", "cuff_reading",
     "monitoring_episode", "device_profile", "refresh_token", "app_user", "patient",
     "session_nonce", "audit_log",
+    # Auth rate-limit counters now live in Postgres, so they persist across tests unless they are
+    # truncated here. One test's failed logins would otherwise exhaust another test's allowance.
+    "rate_limit_counter",
 )
 
 DEMO_PASSWORD = "test-password-not-a-secret"

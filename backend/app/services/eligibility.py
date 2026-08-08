@@ -80,25 +80,34 @@ def _grade_accelerometer(
     if accel_rate_hz >= settings.accel_rate_qualified_hz:
         verdict, explanation = (
             QualifiedStatus.QUALIFIED,
-            "Sample interval is fine enough to place the aortic-valve-opening landmark to "
-            "within a few milliseconds.",
+            "At or above the target rate, where the sample interval is no longer a leading "
+            "source of timing error.",
         )
     elif accel_rate_hz >= settings.accel_rate_provisional_hz:
         verdict, explanation = (
             QualifiedStatus.PROVISIONAL,
-            "Usable, but the sample interval is coarse relative to the transit-time changes "
-            "being tracked, so more of the measurement is interpolation.",
+            # Written to stand on its own. This is the band most handsets land in, and a bare
+            # label invites the reader to supply their own meaning — usually a worse one than
+            # the truth. So the finding says what provisional does and does not imply.
+            "Above the minimum rate and cleared for use. Spot checks run normally and nothing "
+            "is restricted. Android limits most handsets to 200 Hz unless the app holds the "
+            "high-sampling-rate permission, so this is the usual result rather than a fault. "
+            "Between the minimum and the target the sample interval is coarser relative to the "
+            "differences being tracked, so a larger share of sessions may be set aside as "
+            "unusable — which shows up as more repeat spot checks, never as a less trustworthy "
+            "estimate.",
         )
     else:
         verdict, explanation = (
             QualifiedStatus.NOT_QUALIFIED,
-            "Sample interval is too coarse to locate the landmark the measurement depends on.",
+            "Below the minimum rate. The timing error would be larger than the differences the "
+            "method measures, so no estimate is offered on this handset at all.",
         )
     return EligibilityFinding(
         measurement="Accelerometer achieved rate",
         measured=f"{accel_rate_hz:.1f} Hz",
-        threshold=f">= {settings.accel_rate_qualified_hz:.0f} Hz qualified, "
-        f">= {settings.accel_rate_provisional_hz:.0f} Hz provisional",
+        threshold=f">= {settings.accel_rate_qualified_hz:.0f} Hz target, "
+        f">= {settings.accel_rate_provisional_hz:.0f} Hz minimum",
         verdict=verdict,
         explanation=explanation,
     )

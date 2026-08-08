@@ -16,7 +16,7 @@ from app.api.deps import (
 from app.logging_config import get_logger
 from app.models import AuditAction, DeviceProfile, Patient
 from app.schemas.device import DeviceProfileCreate, DeviceProfileOut, EligibilityFindingOut
-from app.services import audit
+from app.services import audit, language
 from app.services.eligibility import evaluate_device
 
 router = APIRouter(prefix="/device-profiles", tags=["device-profiles"])
@@ -125,8 +125,6 @@ def get_device_profile(
 
 
 def _render(profile: DeviceProfile, verdict) -> DeviceProfileOut:
-    from app.schemas.common import SyntheticFlag
-
     return DeviceProfileOut(
         id=profile.id,
         patient_id=profile.patient_id,
@@ -141,7 +139,12 @@ def _render(profile: DeviceProfile, verdict) -> DeviceProfileOut:
         qualified_status=profile.qualified_status,
         submitted_at=profile.submitted_at,
         synthetic=profile.synthetic,
-        synthetic_notice=SyntheticFlag.notice_for(profile.synthetic),
+        # Device-specific wording, not the generic badge. A seeded device profile is the one
+        # synthetic record that reads as a hardware benchmark — "204.8 Hz" looks like something
+        # somebody measured — and invariant 9 singles out device benchmarks by name.
+        synthetic_notice=(
+            language.SYNTHETIC_DEVICE_PROFILE_NOTICE if profile.synthetic else None
+        ),
         findings=[
             EligibilityFindingOut(
                 measurement=f.measurement,

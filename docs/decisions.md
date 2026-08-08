@@ -396,24 +396,33 @@ cannot silently return to proving nothing.
 
 ## Deliberate limitations
 
-### Rate limiting is per-process
+### Rate limiting is per-process on the ingest endpoints only
 
-`FixedWindowRateLimiter` holds counters in process memory, so with N API workers the effective
-ceiling is N times the configured one. Acceptable for a single-instance demo, not acceptable for
-production. §4 asks for Redis to be justified before adding it, and a shared counter store is that
-justification if this ever runs multi-instance — the limiter interface is deliberately narrow so
-swapping the backing store touches one class.
+**Superseded in part.** The auth endpoints are now Postgres-backed and correct across processes —
+see "Postgres-backed rate limiting on the auth endpoints" below.
 
-### Refresh tokens are not revocable
+`FixedWindowRateLimiter` still holds counters in process memory for ingest, summary and nonce, so
+with N API workers the effective ceiling there is N times the configured one. That remains
+acceptable: on those endpoints the limit protects capacity, and the cost of an over-generous
+ceiling is some extra database work. It was *not* acceptable on auth, where the ceiling is the
+brute-force defence, which is why that one moved.
 
-There is no server-side denylist, so a leaked refresh token stays valid for its 14-day TTL. Out of
-scope for Phase 1; the fix is a `jti` denylist table checked on refresh.
+### ~~Refresh tokens are not revocable~~ — resolved
 
-### The device eligibility bands are engineering thresholds, not validated benchmarks
+**No longer true.** C1 shipped the `refresh_token` table, rotation, revocation and family-level
+reuse detection. A leaked token no longer survives to its TTL: logout revokes it, rotation
+supersedes it, and replaying a superseded one revokes the whole family. Kept here, struck through,
+because the sentence was quoted into a hand-over and someone will come looking for it.
 
-`DeviceEligibilitySettings` is reasoned from the measurement requirement — the PTT differences
+### The device eligibility bands are specified figures, not validated benchmarks
+
+**Updated.** The accelerometer bands are no longer reasoned from first principles: they are the
+proposal's own figures (page 7 — 200 Hz minimum, 500 Hz target). The camera, hardware-level and
+clock-stability bands are still reasoned from the measurement requirement — the PTT differences
 being tracked are milliseconds to tens of milliseconds, so sampling interval and clock stability
-have to sit well below that. None of it has been validated against hardware. Phase 3's profiler
+have to sit well below that.
+
+Either way, **none of it has been validated against hardware.** Phase 3's profiler
 produces the measured numbers, and invariant 9 forbids inventing them in the meantime.
 `app/config.py` states plainly which of its defaults are cited and which are design choices.
 
@@ -796,11 +805,11 @@ The history is preserved where it matters: `refresh_token` is mutable current st
 
 ---
 
-## Pending: Postgres-backed rate limiting (C5, not yet implemented)
+## Postgres-backed rate limiting on the auth endpoints (C5, shipped)
 
-Recorded before implementation so the reasoning is not re-derived. **Deferred deliberately**:
-the judged demo is a working product on screen, and rate-limiting depth is correct work at the
-wrong time. This entry is the design, not a description of shipped code.
+The design below was recorded before implementation and is now shipped as described, in
+`app/security/authlimit.py`, `app/models/ratelimit.py` and migration `0006_rate_limit_counter`.
+Four things the design did not anticipate are recorded at the end.
 
 ### Why the current limiter is not sufficient
 
@@ -854,7 +863,93 @@ response, and `revoke_family` already exists.
 ### Thresholds
 
 All from `SecuritySettings` via pydantic-settings, never literals — the existing
-`ingest_rate_limit_*` fields are the pattern to follow.
+`ingest_rate_limit_*` fields are the pattern to follow. Shipped values, each with its reasoning in
+`config.py`: 10 login attempts per username per 15 minutes, 60 per address per 15 minutes, 20
+refreshes per family per hour, 120 per address per hour, family revoked at 20 past the limit.
+
+### Four things the design did not anticipate
+
+**1. The counter has to commit separately.** A failed login rolls its transaction back — that is
+how the audit record and the failure response coexist — and an increment inside that transaction
+rolls back with it. A limiter whose increments vanish along with the failures they were counting
+counts nothing at all. `authlimit.check` commits its own increment.
+`test_counters_survive_the_failed_login_rollback` is the guard.
+
+**2. The limit must apply before the password is verified, and must hold even when the password
+is right.** Checking after verification still performs the expensive hash comparison on every
+attempt, which is most of what an attacker is trying to make the server do. And if a correct
+password bypassed the counter, an attacker would be throttled right up until the attempt that
+succeeded — the only one that matters. Both are tested.
+
+**3. Subject keys are hashed before storage.** Not in the original design. An attempted username
+is credential-adjacent — a table of failed logins is a list of usernames worth trying — and a
+client address is personal data. Neither belongs in a table whose only job is to answer "how
+many". This is not protecting a secret; the input space is small enough that a targeted guess
+could be confirmed. It is making sure a dump of a counting table is not also a target list.
+
+**4. `X-Forwarded-For` is deliberately not trusted.** Behind a proxy it is authoritative; in front
+of one it is attacker-controlled, and honouring it unconditionally would let any caller reset
+their own limit by inventing an address. Deploying behind a real proxy means configuring proxy
+headers middleware, not reading the header at the endpoint.
+
+Also worth knowing: the counter increments **whether or not the request is allowed**, unlike the
+in-memory limiter. That is what makes a caller hammering a locked bucket visible rather than
+invisible, and it is what lets the refresh endpoint distinguish "over the limit once" from "over
+the limit repeatedly" — the signal that justifies revoking a family.
+
+`rate_limit_counter` had to be added to `ALL_TABLES` in `conftest.py`: counters now outlive a
+test, and one test's failed logins would otherwise exhaust another's allowance.
+
+---
+
+## Device eligibility rebanded to the proposal's figures
+
+The bands were 200 Hz qualified / 100 Hz provisional. The proposal (page 7) specifies a **minimum
+of 200 Hz and a target of 500 Hz**, with non-compliant handsets excluded at onboarding rather than
+permitted to produce estimates whose error exceeds the signal. The bands are now:
+
+| measured rate | verdict |
+|---|---|
+| below 200 Hz | `not_qualified` |
+| 200–500 Hz | `provisional` |
+| 500 Hz and above | `qualified` |
+
+The old banding treated 200 Hz as the *target*. It is the floor — the point below which the timing
+error is larger than the effect being measured (the proposal's own figure: 10.6 ms jitter at
+100 Hz against a signal carried in 10–50 ms shifts). A handset sitting just above the floor is not
+"qualified"; it is usable with a stated caveat. This also aligns the backend with the patient app,
+which was already gating on 200/500.
+
+### The consequence that shapes everything else
+
+Android caps sensor delivery at 200 Hz unless the app holds `HIGH_SAMPLING_RATE_SENSORS`
+(Android 12+). **So the great majority of real handsets land in the provisional band.** Provisional
+is the normal case, not the exception, and two things follow.
+
+**It gates nothing, and a test now says so.** `qualified_status` is computed, stored and rendered;
+it is never consulted before accepting a session or producing an estimate.
+`test_provisional_status_gates_nothing` submits an identical session against a provisional and a
+qualified profile and requires the same status code — and asserts the qualified case is a 201
+first, so the test cannot pass by both being rejected. If someone later makes the status a gate,
+the eligibility rule would live in two places, one documented and one not, and patients on the most
+common class of Android handset would silently stop getting estimates.
+
+**The finding explains itself inline.** A bare `PROVISIONAL` invites the reader to supply their own
+meaning, and the meaning they supply is worse than the truth. The explanation now states, in the
+finding itself, that the handset is cleared for use, that nothing is restricted, that this is the
+usual result rather than a fault, and that the real consequence is more repeat spot checks — never
+a less trustworthy estimate. `test_provisional_explains_itself_without_a_lookup` pins that wording.
+
+### Seeded device profiles say what they are
+
+A seeded device profile is the one synthetic record that reads as a hardware benchmark: `204.8 Hz`
+looks like something somebody measured on a bench. The generic badge — "not a real measurement" —
+carries the wrong reassurance, because it is about measurements from a *person*. Invariant 9 names
+device benchmarks specifically ("never invent device benchmark results"), so these carry their own
+notice: **"SYNTHETIC SEED DATA — ILLUSTRATIVE OF UI STATES, NOT MEASURED PERFORMANCE"**.
+
+The demo profile is deliberately left at 204.8 Hz, in the provisional band, so the demo shows the
+state a reviewer is most likely to encounter rather than an idealised one.
 
 ---
 

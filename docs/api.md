@@ -87,6 +87,12 @@ Trade a refresh token for a fresh pair.
 The refresh token is re-checked against the user row rather than trusted on its claims
 alone, so a token minted for an account that has since been removed stops working.
 
+Rate limited per **token family**, which is the precise unit here: a family is exactly one
+login, and reuse detection already operates at that granularity. Per-address alone would fail
+behind NAT, where an attacker shares an address with legitimate users and the limit either
+lets the attack through or locks out the bystanders. Coarse per-address plus precise
+per-family gives both.
+
 Request body: `RefreshRequest`
 
 | Response | Description |

@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 
@@ -21,7 +21,7 @@ from app.api.deps import (
     require_roles,
 )
 from app.logging_config import get_logger
-from app.models import AppUser, AuditAction, Patient, UserRole
+from app.models import AppUser, AuditAction, Patient, RefreshToken, UserRole
 from app.schemas.auth import (
     LogoutRequest,
     RefreshRequest,
@@ -29,6 +29,7 @@ from app.schemas.auth import (
     TokenResponse,
     UserOut,
 )
+from app.security import authlimit
 from app.security.passwords import hash_password, verify_password
 from app.security.tokens import Principal, TokenError, decode_token, issue_token
 # Aliased: the route handler below is also called `refresh_tokens`, and at module scope the
@@ -41,13 +42,75 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 log = get_logger(__name__)
 
 
+def _client_address(request: Request) -> str:
+    """The caller's address, for the coarse per-address limit.
+
+    Deliberately does **not** trust X-Forwarded-For. Behind a proxy that header is authoritative;
+    in front of one it is attacker-controlled, and honouring it unconditionally would let anyone
+    reset their own limit by inventing an address. If this is ever deployed behind a real proxy,
+    configure the proxy headers middleware rather than reading the header here.
+    """
+    return request.client.host if request.client else "unknown"
+
+
+def _deny(decision, *, detail: str) -> None:
+    """Raise a 429 carrying the headers a well-behaved client needs to back off."""
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=detail,
+        headers={
+            "Retry-After": str(decision.retry_after_seconds),
+            "X-RateLimit-Limit": str(decision.limit),
+            "X-RateLimit-Remaining": str(decision.remaining),
+        },
+    )
+
+
 @router.post("/token", response_model=TokenResponse, summary="Exchange credentials for tokens")
 def issue_tokens(
     form: Annotated[OAuth2PasswordRequestForm, Depends()],
+    request: Request,
     db: DbDep,
     settings: SettingsDep,
 ) -> TokenResponse:
     """OAuth2 password grant."""
+    # Rate limited before the password is checked, and before the user row is even loaded. A
+    # limiter that runs after verification still performs the expensive hash comparison on every
+    # attempt, which is most of what an attacker is trying to make us do.
+    #
+    # Keyed on the *attempted* username rather than a resolved user id: at this point there may
+    # be no such user, and refusing to count attempts against non-existent accounts would leave
+    # credential stuffing — which is mostly attempts against non-existent accounts — unmetered.
+    security = settings.security
+    username_limit = authlimit.AuthLimit(
+        bucket="auth_token_username",
+        limit=security.auth_login_limit_per_username,
+        window_seconds=security.auth_login_window_seconds,
+    )
+    address_limit = authlimit.AuthLimit(
+        bucket="auth_token_address",
+        limit=security.auth_login_limit_per_address,
+        window_seconds=security.auth_login_address_window_seconds,
+    )
+
+    by_username = authlimit.check(db, username_limit, form.username)
+    by_address = authlimit.check(db, address_limit, _client_address(request))
+    if not by_username.allowed or not by_address.allowed:
+        audit.record_unauthenticated(
+            db, actor=form.username, action=AuditAction.AUTH_LOGIN_FAILED
+        )
+        db.commit()
+        log.warning(
+            "auth_rate_limited",
+            extra={"bucket": "token", "username_ok": by_username.allowed},
+        )
+        # The same message either way. Saying which limit was hit tells an attacker whether they
+        # are being throttled per account or per address, which is a hint about how to spread out.
+        _deny(
+            by_username if not by_username.allowed else by_address,
+            detail="too many sign-in attempts; try again later",
+        )
+
     user = db.execute(
         select(AppUser).where(AppUser.subject == form.username)
     ).scalar_one_or_none()
@@ -88,12 +151,18 @@ def issue_tokens(
 
 @router.post("/refresh", response_model=TokenResponse, summary="Exchange a refresh token")
 def refresh_tokens(
-    body: RefreshRequest, db: DbDep, settings: SettingsDep
+    body: RefreshRequest, request: Request, db: DbDep, settings: SettingsDep
 ) -> TokenResponse:
     """Trade a refresh token for a fresh pair.
 
     The refresh token is re-checked against the user row rather than trusted on its claims
     alone, so a token minted for an account that has since been removed stops working.
+
+    Rate limited per **token family**, which is the precise unit here: a family is exactly one
+    login, and reuse detection already operates at that granularity. Per-address alone would fail
+    behind NAT, where an attacker shares an address with legitimate users and the limit either
+    lets the attack through or locks out the bystanders. Coarse per-address plus precise
+    per-family gives both.
     """
     try:
         principal = decode_token(
@@ -115,6 +184,54 @@ def refresh_tokens(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="refresh token carries no identifier and cannot be rotated",
         )
+
+    security = settings.security
+    family_limit = authlimit.AuthLimit(
+        bucket="auth_refresh_family",
+        limit=security.auth_refresh_limit_per_family,
+        window_seconds=security.auth_refresh_window_seconds,
+    )
+    address_limit = authlimit.AuthLimit(
+        bucket="auth_refresh_address",
+        limit=security.auth_refresh_limit_per_address,
+        window_seconds=security.auth_refresh_address_window_seconds,
+    )
+
+    # The family is read before rotation, because rotation is what would change it. Falling back
+    # to the jti keeps an unknown token metered rather than unmetered — the failure mode of a
+    # missing row must not be "no limit applies".
+    stored = db.execute(
+        select(RefreshToken).where(RefreshToken.jti == principal.jti)
+    ).scalar_one_or_none()
+    family_key = str(stored.family_id) if stored is not None else principal.jti
+
+    by_family = authlimit.check(db, family_limit, family_key)
+    by_address = authlimit.check(db, address_limit, _client_address(request))
+
+    if not by_family.allowed:
+        # A client hammering one family's tokens is either broken or hostile. Tolerate a few over
+        # the line — retries and clock skew are real — and end the login past that, because at
+        # that depth it has stopped being plausibly accidental.
+        depth = authlimit.breach_depth(db, family_limit, family_key)
+        if stored is not None and depth >= security.auth_refresh_breach_revoke_threshold:
+            refresh_token_service.revoke_family(
+                db, family_id=stored.family_id, reason="refresh_rate_limit_breached"
+            )
+            audit.record(
+                db,
+                principal=principal,
+                action=AuditAction.AUTH_REFRESH_REUSE_DETECTED,
+                target=user.id,
+            )
+            db.commit()
+            log.warning(
+                "refresh_family_revoked_for_rate_limit",
+                extra={"user_id": str(user.id), "breach_depth": depth},
+            )
+        _deny(by_family, detail="too many refresh attempts; sign in again")
+
+    if not by_address.allowed:
+        _deny(by_address, detail="too many refresh attempts; try again later")
 
     expires_at = datetime.now(tz=timezone.utc) + timedelta(
         days=settings.security.refresh_token_ttl_days

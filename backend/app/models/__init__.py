@@ -5,6 +5,7 @@ relies on for autogenerate and which the tests introspect.
 """
 
 from app.models.auth import RefreshToken
+from app.models.ratelimit import RateLimitCounter
 from app.models.base import Base, SyntheticMixin, utcnow
 from app.models.clinical import (
     ClinicianSummary,
@@ -82,6 +83,7 @@ __all__ = [
     "PTT_ARRAY_DB_CEILING",
     "QualifiedStatus",
     "RedFlagEvent",
+    "RateLimitCounter",
     "RefreshToken",
     "RejectionReason",
     "SessionNonce",

@@ -223,7 +223,9 @@ def device_settings():
 
 def _grade(device_settings, **overrides):
     kwargs = {
-        "accel_rate_hz": 220.0,
+        # At or above the 500 Hz target, so the baseline handset is unambiguously qualified and
+        # each parametrised override below is the only thing limiting the verdict.
+        "accel_rate_hz": 520.0,
         "camera_fps": 60.0,
         "camera_hw_level": CameraHardwareLevel.FULL,
         "manual_sensor": True,
@@ -242,8 +244,10 @@ def test_a_capable_handset_qualifies(device_settings) -> None:
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
-        ({"accel_rate_hz": 150.0}, QualifiedStatus.PROVISIONAL),
-        ({"accel_rate_hz": 40.0}, QualifiedStatus.NOT_QUALIFIED),
+        # Bands are 200 Hz minimum / 500 Hz target (proposal p.7); see
+        # test_device_eligibility_bands.py for the boundaries themselves.
+        ({"accel_rate_hz": 250.0}, QualifiedStatus.PROVISIONAL),
+        ({"accel_rate_hz": 150.0}, QualifiedStatus.NOT_QUALIFIED),
         ({"camera_fps": 45.0}, QualifiedStatus.PROVISIONAL),
         ({"camera_fps": 15.0}, QualifiedStatus.NOT_QUALIFIED),
         ({"camera_hw_level": CameraHardwareLevel.LIMITED}, QualifiedStatus.PROVISIONAL),
@@ -263,14 +267,14 @@ def test_each_measurement_can_limit_the_verdict(
 def test_the_verdict_is_the_worst_finding(device_settings) -> None:
     """A phone is only as capable as its weakest relevant property."""
     verdict = _grade(
-        device_settings, accel_rate_hz=400.0, camera_hw_level=CameraHardwareLevel.LEGACY
+        device_settings, accel_rate_hz=520.0, camera_hw_level=CameraHardwareLevel.LEGACY
     )
     assert verdict.status is QualifiedStatus.NOT_QUALIFIED
 
 
 def test_every_finding_shows_its_numbers(device_settings) -> None:
     """BUILD_SPEC 5.5 renders the measured value and what it means, never a bare pass/fail."""
-    verdict = _grade(device_settings, accel_rate_hz=150.0)
+    verdict = _grade(device_settings, accel_rate_hz=250.0)
 
     assert len(verdict.findings) == 6
     for finding in verdict.findings:

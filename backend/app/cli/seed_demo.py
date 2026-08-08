@@ -297,6 +297,11 @@ def _bootstrap(
 
     # Measured-looking values for a mid-range handset. Invariant 9: these are illustrative
     # numbers for a fictional device, not benchmark results from real hardware.
+    # 204.8 Hz sits in the provisional band (200–500 Hz) on purpose. That is the band the great
+    # majority of real Android handsets land in, because the platform caps sensor delivery at
+    # 200 Hz without HIGH_SAMPLING_RATE_SENSORS — so the demo shows the state a reviewer is most
+    # likely to meet, rather than an idealised one. The numbers are illustrative of UI states and
+    # are labelled as such in the API; they are not a measured benchmark (invariant 9).
     accel_rate_hz, camera_fps = 204.8, 60.4
     verdict = evaluate_device(
         accel_rate_hz=accel_rate_hz,
