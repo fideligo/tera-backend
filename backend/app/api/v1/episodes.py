@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 
 from app.api.deps import (
@@ -100,6 +100,28 @@ def get_summary(
     set only when a clinician is the caller — a patient fetching it is not a clinical review.
     """
     episode = load_episode(episode_id, principal, db)
+
+    # Proposal, page 4: the exception summary is a "role-protected clinician web view". A
+    # patient owns the underlying records and can read every one of them on their own
+    # timeline, so this is not about hiding data from them — the summary is written for a
+    # clinician, in clinical shorthand, and is not the interface a patient should read their
+    # own care through.
+    #
+    # 403 rather than 404: the patient already knows their episode exists, so refusing
+    # discloses nothing, and 404 would be a lie that makes the client harder to debug.
+    if principal.is_patient:
+        audit.record(
+            db,
+            principal=principal,
+            action=AuditAction.CLINICIAN_ACCESS_DENIED,
+            target=episode.id,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="the episode summary is a clinician view; your records are on your timeline",
+        )
+
     document = summary_service.build(db, episode=episode)
 
     summary_service.persist(

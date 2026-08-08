@@ -11,6 +11,7 @@ from app.api.deps import (
     DbDep,
     PrincipalDep,
     SettingsDep,
+    assert_owns_or_404,
     assert_patient_scope,
 )
 from app.logging_config import get_logger
@@ -107,8 +108,10 @@ def get_calibration(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="calibration not found"
         )
+    # 404, not 403: a 403 would distinguish "someone else's calibration" from "no such
+    # calibration", disclosing that the id names a real patient's record.
     if not principal.is_clinician:
-        assert_patient_scope(principal, calibration.patient_id)
+        assert_owns_or_404(principal, calibration.patient_id, resource="calibration")
 
     return _render(
         calibration, [link.session_id for link in calibration.source_sessions]

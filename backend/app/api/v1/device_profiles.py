@@ -6,7 +6,13 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.api.deps import DbDep, PrincipalDep, SettingsDep, assert_patient_scope
+from app.api.deps import (
+    DbDep,
+    PrincipalDep,
+    SettingsDep,
+    assert_owns_or_404,
+    assert_patient_scope,
+)
 from app.logging_config import get_logger
 from app.models import AuditAction, DeviceProfile, Patient
 from app.schemas.device import DeviceProfileCreate, DeviceProfileOut, EligibilityFindingOut
@@ -101,8 +107,10 @@ def get_device_profile(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="device profile not found"
         )
+    # 404, not 403 — see assert_owns_or_404. A device profile names a handset belonging to a
+    # specific patient; confirming one exists is a disclosure about them.
     if not principal.is_clinician:
-        assert_patient_scope(principal, profile.patient_id)
+        assert_owns_or_404(principal, profile.patient_id, resource="device profile")
 
     verdict = evaluate_device(
         accel_rate_hz=profile.accel_rate_hz,

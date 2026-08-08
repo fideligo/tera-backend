@@ -75,8 +75,7 @@ def load_episode(
     BUILD_SPEC 4.5: "Clinician access scoped to episodes where they are the reviewing
     professional." A patient sees only their own.
 
-    An episode the caller may not see returns 404 rather than 403. 403 would confirm that the
-    id names a real episode, which is a small but free disclosure about another patient.
+    Cross-tenant access returns 404 — see :func:`assert_owns_or_404` for why.
     """
     episode = db.get(MonitoringEpisode, episode_id)
     if episode is None:
@@ -93,7 +92,15 @@ def load_episode(
 
 
 def assert_patient_scope(principal: Principal, patient_id: uuid.UUID) -> None:
-    """A patient principal may only act on their own patient record."""
+    """A patient principal may only act on their own patient record.
+
+    Returns 403, not 404, and that is deliberate: this is a pure comparison against the
+    ``patient_id`` in the caller's own token, made before any database lookup. The answer is
+    identical for a patient record that exists and one that does not, so nothing is disclosed.
+
+    Use this when the caller *names* another patient in a request body. Use
+    :func:`assert_owns_or_404` when the caller has already caused a row to be loaded.
+    """
     if principal.is_admin:
         return
     if principal.is_patient and principal.patient_id == patient_id:
@@ -101,6 +108,34 @@ def assert_patient_scope(principal: Principal, patient_id: uuid.UUID) -> None:
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="this token may not act on that patient record",
+    )
+
+
+def assert_owns_or_404(
+    principal: Principal, owner_patient_id: uuid.UUID, *, resource: str
+) -> None:
+    """Deny access to another patient's row by claiming it does not exist.
+
+    The rule, applied consistently across the API:
+
+    * **404** when the caller is not entitled to know the resource exists — anything belonging
+      to another patient. Returning 403 here would confirm that the id names a real row, which
+      is a disclosure about someone else's care even when no field is returned. An attacker
+      with a list of candidate ids could separate the real from the invented.
+    * **403** when the resource is not secret but the caller lacks authority — a patient
+      hitting an admin-only endpoint, or asking for the clinician summary of their own episode.
+      They already know it exists; refusing tells them nothing new, and 404 would be a lie that
+      makes the client harder to debug.
+
+    A clinician is not covered by this helper: their scope is the episodes they review, which
+    :func:`load_episode` resolves.
+    """
+    if principal.is_admin:
+        return
+    if principal.is_patient and principal.patient_id == owner_patient_id:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND, detail=f"{resource} not found"
     )
 
 

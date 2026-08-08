@@ -701,6 +701,101 @@ dependency, and only for the optional upload.
 
 ---
 
+## Auth and tenant isolation
+
+Covers commits C1–C3. Two source documents govern this repo: **`docs/proposal.pdf`** is the
+authority for product scope, clinical constraints, safety requirements, device thresholds and
+success metrics; **`BUILD_SPEC.md`** is the authority for API surface, payload contracts, schema
+and constraint sketches. Where a requirement comes from neither, it is labelled as such below
+rather than dressed up as one of them.
+
+### Password grant is a project requirement, not a proposal requirement
+
+The proposal does not mention OAuth at all. Its security controls (Table B1) are "consent-based
+access, patient and clinician role separation, audit trails, and data minimisation", plus
+"encryption in transit and at rest". BUILD_SPEC 4.5 says "OAuth2 with short-lived JWT access
+tokens plus refresh" without naming a grant.
+
+An earlier instruction asked for authorisation-code flow on the basis that the proposal
+specified it. It does not — that requirement came from an appendix table in an older draft that
+was cut when the proposal was condensed. It is therefore **a requirement from the project
+owner**, not from either source document. Recorded that way deliberately: calling it "aligning
+with the proposal" would be false, and the next person would go looking for a section that no
+longer exists.
+
+**Decision: keep the password grant.** For a first-party client with no third-party identity
+provider, authorisation-code adds an authorization server, redirect-URI registration and a
+custom-tab flow on Android for no gain in security — the client already handles the password.
+
+**Migration path** if SSO is ever required: add `GET /v1/auth/authorize`, make
+`POST /v1/auth/token` accept `grant_type=authorization_code` with PKCE alongside the existing
+grant, keep the refresh-token machinery from C1 unchanged (it is grant-agnostic), then retire
+the password grant once every client has moved. Nothing in the current design blocks that.
+
+### Registration is admin-only, and that is an implementation detail
+
+The proposal describes enrolment as clinic-initiated: a patient is enrolled into a monitoring
+episode when their treatment is adjusted, by the clinic. There is no self-service sign-up in the
+product as described, so `POST /v1/auth/register` requires the `admin` role.
+
+The `admin` role itself comes from BUILD_SPEC 4.5, not from the proposal, which names only
+patient and clinician. Both are implementation details rather than proposal requirements.
+
+A public sign-up form would let anyone create an account holding clinical data with no clinic
+behind it, which is a different product from the one described.
+
+### 404 for cross-tenant, 403 for lacking authority
+
+Applied consistently and locked by `tests/test_tenant_isolation.py`:
+
+- **404** when the caller is not entitled to know the resource exists — anything belonging to
+  another patient. A 403 confirms the id names a real row, which is a disclosure about someone
+  else's care even when no field is returned. Someone holding a list of candidate ids could
+  separate the real from the invented.
+- **403** when the resource is not secret but the caller lacks authority — a patient hitting the
+  admin-only register endpoint, or asking for the clinician summary of their *own* episode. They
+  already know it exists; refusing tells them nothing new, and 404 would be a lie that makes the
+  client harder to debug.
+
+`assert_patient_scope` returns **403 and is right to**, even though it guards cross-tenant
+writes: it compares against the `patient_id` in the caller's own token *before any database
+lookup*, so the answer is identical for a patient record that exists and one that does not. The
+distinction that matters is not "cross-tenant versus authority" but **whether the response can
+distinguish an existing row from a missing one**.
+
+Two real leaks were found and fixed while applying this. `GET /v1/calibrations/{id}` and
+`GET /v1/device-profiles/{id}` loaded the row first and checked ownership second, so an invented
+id returned 404 while another patient's real id returned 403 — a probe oracle. Both now use
+`assert_owns_or_404`, and the tests assert the two responses are byte-identical rather than
+merely both being refusals.
+
+### The clinician summary is closed to patients
+
+Proposal, page 4: the exception summary is a "role-protected **clinician** web view". It was
+previously readable by the patient who owned the episode.
+
+This is not about withholding data — every record in it is the patient's own and all of it is on
+their timeline. The summary is written for a clinician, in clinical shorthand, prioritising
+exceptions; it is not the interface a patient should read their own care through. Returns 403
+per the rule above, and records `clinician_access_denied` in the audit log.
+
+### `refresh_token` is deliberately not append-only
+
+Every clinical table carries a trigger rejecting `UPDATE` and `DELETE` (invariant 5).
+`refresh_token` does not, for two reasons:
+
+1. **Revocation is an update.** Marking a token revoked or superseded is the entire purpose of
+   the table. Under the trigger it would be impossible, and logout would have to be implemented
+   by inserting tombstones and reading the latest — the same mutation with more moving parts and
+   a worse failure mode.
+2. **It holds no clinical content.** A jti, a user id, timestamps, a revocation reason. Session
+   bookkeeping, not a record of care, and invariant 5 exists to protect the latter.
+
+The history is preserved where it matters: `refresh_token` is mutable current state, and
+`audit_log` — which *is* append-only — is the immutable record of what happened to it.
+
+---
+
 ## Environment notes
 
 The Compose Postgres publishes on host port **5434**, not 5432 or 5433 — both were already taken
