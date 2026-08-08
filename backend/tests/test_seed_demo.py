@@ -93,16 +93,23 @@ def seeded() -> dict:
                 "LEFT JOIN trend_estimate te ON te.session_id = ms.id "
                 "WHERE ms.episode_id = :ep AND ms.status = 'completed' AND te.id IS NULL"
             ),
+            # Scoped to the rows this seeder created, not to the whole database. An unscoped
+            # count also picks up the ordinary non-synthetic fixtures other test modules leave
+            # behind, which made this assertion depend on which files ran first.
             "unflagged_synthetic": scalar(
-                "SELECT (SELECT count(*) FROM measurement_session WHERE NOT synthetic) "
-                "+ (SELECT count(*) FROM trend_estimate WHERE NOT synthetic) "
-                "+ (SELECT count(*) FROM cuff_reading WHERE NOT synthetic) "
-                "+ (SELECT count(*) FROM calibration WHERE NOT synthetic) "
-                "+ (SELECT count(*) FROM medication_event WHERE NOT synthetic) "
-                "+ (SELECT count(*) FROM symptom_event WHERE NOT synthetic) "
-                "+ (SELECT count(*) FROM patient WHERE NOT synthetic) "
-                "+ (SELECT count(*) FROM monitoring_episode WHERE NOT synthetic) "
-                "+ (SELECT count(*) FROM device_profile WHERE NOT synthetic)"
+                "SELECT (SELECT count(*) FROM measurement_session "
+                "          WHERE episode_id = :ep AND NOT synthetic) "
+                "+ (SELECT count(*) FROM trend_estimate te "
+                "     JOIN measurement_session ms ON ms.id = te.session_id "
+                "     WHERE ms.episode_id = :ep AND NOT te.synthetic) "
+                "+ (SELECT count(*) FROM cuff_reading WHERE episode_id = :ep AND NOT synthetic) "
+                "+ (SELECT count(*) FROM calibration WHERE patient_id = :pt AND NOT synthetic) "
+                "+ (SELECT count(*) FROM medication_event "
+                "     WHERE episode_id = :ep AND NOT synthetic) "
+                "+ (SELECT count(*) FROM symptom_event WHERE episode_id = :ep AND NOT synthetic) "
+                "+ (SELECT count(*) FROM patient WHERE id = :pt AND NOT synthetic) "
+                "+ (SELECT count(*) FROM monitoring_episode WHERE id = :ep AND NOT synthetic) "
+                "+ (SELECT count(*) FROM device_profile WHERE patient_id = :pt AND NOT synthetic)"
             ),
         }
 

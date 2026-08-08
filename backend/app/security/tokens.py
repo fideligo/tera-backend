@@ -33,6 +33,10 @@ class Principal:
     patient_id: uuid.UUID | None = None
     clinic_id: str | None = None
 
+    #: The token's ``jti``. For a refresh token this is the key into ``refresh_token``, which is
+    #: what makes revocation possible at all — a JWT on its own cannot be taken back.
+    jti: str | None = None
+
     @property
     def is_patient(self) -> bool:
         return self.role is UserRole.PATIENT
@@ -52,8 +56,14 @@ def issue_token(
     token_type: TokenType,
     settings: SecuritySettings,
     now: datetime | None = None,
+    jti: str | None = None,
 ) -> tuple[str, datetime]:
-    """Mint a signed token and return it with its expiry."""
+    """Mint a signed token and return it with its expiry.
+
+    ``jti`` is supplied by the caller for refresh tokens, so the claim matches the
+    ``refresh_token`` row that records it. Access tokens get a fresh one and are not tracked
+    server-side: their fifteen-minute lifetime is the whole revocation strategy.
+    """
     issued_at = now or datetime.now(tz=timezone.utc)
     lifetime = (
         timedelta(minutes=settings.access_token_ttl_minutes)
@@ -69,7 +79,7 @@ def issue_token(
         "typ": token_type,
         "iat": int(issued_at.timestamp()),
         "exp": int(expires_at.timestamp()),
-        "jti": uuid.uuid4().hex,
+        "jti": jti or uuid.uuid4().hex,
     }
     if principal.patient_id is not None:
         claims["pid"] = str(principal.patient_id)
@@ -113,4 +123,5 @@ def decode_token(
         user_id=user_id,
         patient_id=patient_id,
         clinic_id=claims.get("cid"),
+        jti=claims.get("jti"),
     )

@@ -52,10 +52,17 @@ from app.security.ratelimit import limiter  # noqa: E402
 ALL_TABLES = (
     "calibration_source_session", "trend_estimate", "measurement_session", "clinician_summary",
     "medication_event", "symptom_event", "red_flag_event", "calibration", "cuff_reading",
-    "monitoring_episode", "device_profile", "app_user", "patient", "session_nonce", "audit_log",
+    "monitoring_episode", "device_profile", "refresh_token", "app_user", "patient",
+    "session_nonce", "audit_log",
 )
 
 DEMO_PASSWORD = "test-password-not-a-secret"
+
+
+@pytest.fixture
+def settings():
+    """Process-wide settings, for tests that decode a token or read a threshold themselves."""
+    return get_settings()
 
 
 @pytest.fixture(scope="session", autouse=True)
