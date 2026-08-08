@@ -85,6 +85,12 @@ class RejectionReason(str, Enum):
     IMPLAUSIBLE_PAYLOAD = "implausible_payload"
     # Invariant 7 — no calibration in force means no estimate, not a guess.
     NO_ACTIVE_CALIBRATION = "no_active_calibration"
+    # Build state, not signal quality. The handset captured both streams correctly but the
+    # signal chain that derives per-beat intervals is not implemented in that build. Kept
+    # distinct from POOR_SIGNAL_QUALITY on purpose: collapsing the two would make an unfinished
+    # component indistinguishable from a working one that happened to reject, in the clinical
+    # record itself. Sessions carrying it are still stored and still surfaced (invariant 3).
+    SIGNAL_PROCESSING_UNAVAILABLE = "signal_processing_unavailable"
 
 
 class Posture(str, Enum):

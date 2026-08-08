@@ -107,6 +107,13 @@ REJECTION_WORDING: dict[RejectionReason, str] = {
         "This phone has no active baseline yet, so the recording was kept but no trend could be "
         "worked out from it."
     ),
+    # Says plainly that the app is unfinished, rather than implying the recording was at fault.
+    # Anything vaguer would read as a signal problem, which is the one thing this value exists to
+    # be distinguishable from.
+    RejectionReason.SIGNAL_PROCESSING_UNAVAILABLE: (
+        "This version of the app records both signals but cannot yet work out a result from "
+        "them. The recording was kept, and nothing was estimated from it."
+    ),
 }
 
 # --------------------------------------------------------------------------- notices
