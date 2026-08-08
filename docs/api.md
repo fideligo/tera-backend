@@ -43,6 +43,41 @@ record but no estimate could responsibly be produced from it.
 |---|---|
 | `200` | Successful Response |
 
+### `POST /v1/auth/logout`
+
+**End a session by revoking its refresh token**
+
+Revoke one session, or every session this account holds.
+
+The access token is not revoked and does not need to be: it expires in minutes, and
+maintaining a denylist for it would mean a database read on every authenticated request to
+close a window that closes itself. What logout must guarantee is that the *refresh* token
+stops working, because that is the one with a fortnight of life in it.
+
+Idempotent. Logging out twice, or with a token that has already expired, is a 204 — a client
+clearing its local state should not have to handle an error to do so.
+
+Request body: `LogoutRequest`
+
+| Response | Description |
+|---|---|
+| `204` | Successful Response |
+| `422` | Validation Error |
+
+### `GET /v1/auth/me`
+
+**The account behind the current token**
+
+Identity only.
+
+No clinical content, so a client can establish who it is signed in as without touching a
+patient record. ``active_sessions`` lets a user see whether a device they no longer have is
+still able to refresh.
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+
 ### `POST /v1/auth/refresh`
 
 **Exchange a refresh token**
@@ -57,6 +92,24 @@ Request body: `RefreshRequest`
 | Response | Description |
 |---|---|
 | `200` | Successful Response |
+| `422` | Validation Error |
+
+### `POST /v1/auth/register`
+
+**Create an account (admin only)**
+
+Create a login.
+
+Admin-only, and there is no self-service path. The proposal describes enrolment as
+clinic-initiated: a patient is enrolled into a monitoring episode when their treatment is
+adjusted, by the clinic. A public sign-up form would let anyone create an account holding
+clinical data with no clinic behind it.
+
+Request body: `RegisterRequest`
+
+| Response | Description |
+|---|---|
+| `201` | Successful Response |
 | `422` | Validation Error |
 
 ### `POST /v1/auth/token`
@@ -520,6 +573,15 @@ Discriminator for POST /v1/events.
 |---|---|---|
 | `detail` | array of ValidationError | no |
 
+### `LogoutRequest`
+
+Ending a session means revoking its refresh token; the access token expires on its own.
+
+| Field | Type | Required |
+|---|---|---|
+| `refresh_token` | string \| null | no |
+| `all_sessions` | boolean | no |
+
 ### `NextAction`
 
 What the patient should do next.
@@ -554,6 +616,23 @@ Device eligibility verdict returned by POST /v1/device-profiles.
 | Field | Type | Required |
 |---|---|---|
 | `refresh_token` | string | yes |
+
+### `RegisterRequest`
+
+Create an account. Admin-only.
+
+IMPLEMENTATION DETAIL, not a proposal requirement. The proposal describes enrolment as
+clinic-initiated — a patient is enrolled into a monitoring episode by a clinic when
+treatment is adjusted — so there is no self-registration path to build. Restricting this
+to admins is how that is enforced.
+
+| Field | Type | Required |
+|---|---|---|
+| `subject` | string | yes |
+| `password` | string | yes |
+| `role` | UserRole | yes |
+| `clinic_id` | string \| null | no |
+| `patient_id` | string \| null | no |
 
 ### `RejectionOut`
 
@@ -896,6 +975,20 @@ baseline.
 | `badge` | const `ESTIMATE — NOT A BLOOD-PRESSURE READING` | no |
 | `magnitude_notice` | string | no |
 | `confidence_notice` | string | no |
+
+### `UserOut`
+
+Who the caller is. Deliberately thin — an identity endpoint is not a data endpoint.
+
+| Field | Type | Required |
+|---|---|---|
+| `id` | string | yes |
+| `subject` | string | yes |
+| `role` | UserRole | yes |
+| `clinic_id` | string \| null | yes |
+| `patient_id` | string \| null | yes |
+| `created_at` | string | yes |
+| `active_sessions` | integer | yes |
 
 ### `UserRole`
 

@@ -13,11 +13,23 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 
-from app.api.deps import DbDep, SettingsDep
+from app.api.deps import (
+    HTTP_422_UNPROCESSABLE,
+    DbDep,
+    PrincipalDep,
+    SettingsDep,
+    require_roles,
+)
 from app.logging_config import get_logger
-from app.models import AppUser, AuditAction
-from app.schemas.auth import RefreshRequest, TokenResponse
-from app.security.passwords import verify_password
+from app.models import AppUser, AuditAction, Patient, UserRole
+from app.schemas.auth import (
+    LogoutRequest,
+    RefreshRequest,
+    RegisterRequest,
+    TokenResponse,
+    UserOut,
+)
+from app.security.passwords import hash_password, verify_password
 from app.security.tokens import Principal, TokenError, decode_token, issue_token
 # Aliased: the route handler below is also called `refresh_tokens`, and at module scope the
 # function would shadow the module. Renaming the handler instead would change its operationId
@@ -116,6 +128,145 @@ def refresh_tokens(
     tokens = _mint(_principal_for(user), settings, refresh_jti=issued.jti)
     db.commit()
     return tokens
+
+
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="End a session by revoking its refresh token",
+)
+def logout(body: LogoutRequest, db: DbDep, principal: PrincipalDep, settings: SettingsDep) -> None:
+    """Revoke one session, or every session this account holds.
+
+    The access token is not revoked and does not need to be: it expires in minutes, and
+    maintaining a denylist for it would mean a database read on every authenticated request to
+    close a window that closes itself. What logout must guarantee is that the *refresh* token
+    stops working, because that is the one with a fortnight of life in it.
+
+    Idempotent. Logging out twice, or with a token that has already expired, is a 204 — a client
+    clearing its local state should not have to handle an error to do so.
+    """
+    if body.all_sessions:
+        count = refresh_token_service.revoke_all_for_user(
+            db, user_id=principal.user_id, reason="logout_all"
+        )
+        log.info(
+            "logout_all_sessions",
+            extra={"user_id": str(principal.user_id), "sessions_ended": count},
+        )
+    else:
+        try:
+            token_principal = decode_token(
+                body.refresh_token or "", expected_type="refresh", settings=settings.security
+            )
+        except TokenError:
+            # An unreadable or expired token is already not a usable session. Nothing to do.
+            db.commit()
+            return None
+
+        if token_principal.user_id != principal.user_id:
+            # Revoking someone else's session on the strength of holding their refresh token
+            # would be a denial-of-service primitive.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="that refresh token belongs to a different account",
+            )
+
+        if token_principal.jti:
+            refresh_token_service.revoke(db, jti=token_principal.jti, reason="logout")
+
+    audit.record(
+        db, principal=principal, action=AuditAction.AUTH_LOGOUT, target=principal.user_id
+    )
+    db.commit()
+    return None
+
+
+@router.get("/me", response_model=UserOut, summary="The account behind the current token")
+def read_me(db: DbDep, principal: PrincipalDep) -> UserOut:
+    """Identity only.
+
+    No clinical content, so a client can establish who it is signed in as without touching a
+    patient record. ``active_sessions`` lets a user see whether a device they no longer have is
+    still able to refresh.
+    """
+    user = db.get(AppUser, principal.user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="token subject no longer exists"
+        )
+
+    return UserOut(
+        id=user.id,
+        subject=user.subject,
+        role=user.role,
+        clinic_id=user.clinic_id,
+        patient_id=user.patient_id,
+        created_at=user.created_at,
+        active_sessions=refresh_token_service.active_session_count(db, user_id=user.id),
+    )
+
+
+@router.post(
+    "/register",
+    response_model=UserOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create an account (admin only)",
+)
+def register(
+    body: RegisterRequest,
+    db: DbDep,
+    principal: Annotated[Principal, Depends(require_roles(UserRole.ADMIN))],
+) -> UserOut:
+    """Create a login.
+
+    Admin-only, and there is no self-service path. The proposal describes enrolment as
+    clinic-initiated: a patient is enrolled into a monitoring episode when their treatment is
+    adjusted, by the clinic. A public sign-up form would let anyone create an account holding
+    clinical data with no clinic behind it.
+    """
+    existing = db.execute(
+        select(AppUser).where(AppUser.subject == body.subject)
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="that subject is already registered"
+        )
+
+    if body.patient_id is not None and db.get(Patient, body.patient_id) is None:
+        raise HTTPException(
+            status_code=HTTP_422_UNPROCESSABLE,
+            detail="patient_id does not name an existing patient record",
+        )
+
+    user = AppUser(
+        subject=body.subject,
+        password_hash=hash_password(body.password),
+        role=body.role,
+        clinic_id=body.clinic_id,
+        patient_id=body.patient_id,
+    )
+    db.add(user)
+    db.flush()
+
+    audit.record(db, principal=principal, action=AuditAction.USER_REGISTERED, target=user.id)
+    db.commit()
+
+    # Role and ids only. The password never appears here or in the log.
+    log.info(
+        "user_registered",
+        extra={"created_user_id": str(user.id), "role": user.role.value},
+    )
+
+    return UserOut(
+        id=user.id,
+        subject=user.subject,
+        role=user.role,
+        clinic_id=user.clinic_id,
+        patient_id=user.patient_id,
+        created_at=user.created_at,
+        active_sessions=0,
+    )
 
 
 def _principal_for(user: AppUser) -> Principal:
