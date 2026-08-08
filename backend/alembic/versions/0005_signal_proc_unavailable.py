@@ -6,9 +6,13 @@ sessions must still reach the backend and still be stored (invariant 3) — but 
 assessed at all. A distinct value keeps "the signal was bad" separable from "this part of the
 system is not built yet", in the database rather than in someone's memory.
 
-Revision ID: 0005_signal_processing_unavailable
+Revision ID: 0005_signal_proc_unavailable
 Revises: 0004_audit_unauthenticated_actor
 Create Date: 2026-08-08
+
+The revision id is abbreviated deliberately. ``alembic_version.version_num`` is ``varchar(32)``,
+and the unabbreviated name is 34 characters — which fails on the very last statement of the
+migration, after the DDL has already run. Keep new revision ids under the limit.
 
 """
 from __future__ import annotations
@@ -17,7 +21,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0005_signal_processing_unavailable"
+revision: str = "0005_signal_proc_unavailable"
 down_revision: str | None = "0004_audit_unauthenticated_actor"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
