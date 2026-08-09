@@ -394,6 +394,40 @@ cannot silently return to proving nothing.
 
 ---
 
+## The submit path is verified against a disposable database, never the demo episode
+
+The ingest path — authenticate, take a nonce, `POST /v1/sessions`, get an estimate back, see the
+record in the timeline — had never been observed running end to end. Only its parts had tests.
+
+Verifying it writes a session, and **clinical rows are append-only by trigger**: there is no undo.
+Replaying into the demo episode would have left a permanent record a judge would see in the
+timeline, and the only way to remove it is `tera-seed-demo --reset`, which truncates everything and
+re-seeds with fresh UUIDs — so the demo episode id changes and any bookmarked URL breaks. The
+cleanup is worse than the pollution.
+
+So the check runs against a database created for it and dropped afterwards:
+
+```bash
+docker exec tera-backend-db-1 psql -U tera -d tera -c "CREATE DATABASE tera_replay_check;"
+export TERA_DATABASE_URL="postgresql+psycopg://tera:tera_dev_password@localhost:5434/tera_replay_check"
+alembic upgrade head && tera-seed-demo
+uvicorn app.main:app --host 127.0.0.1 --port 8001      # a second instance, demo untouched on 8000
+tera-replay samples/session_normal.json --base-url http://127.0.0.1:8001 --username ... --password ...
+tera-replay samples/session_rejected.json --base-url http://127.0.0.1:8001 --username ... --password ...
+# ... then drop the database
+```
+
+Pointing a dashboard at `TERA_API_URL=http://127.0.0.1:8001` completes the picture: both replayed
+sessions appear at the head of the patient timeline, the accepted one as an outlined "Within your
+usual range" row and the rejected one as a dashed "Spot check not usable" row.
+
+Verified 9 August 2026: 201 on both, a trend estimate computed against the calibration in force,
+timeline items 82 to 84, and the demo episode confirmed still at 82 afterwards.
+
+**What this does not prove.** Everything above went through the public API from a laptop. The
+handset has still never submitted anything — the phone-to-network segment is the one part of the
+chain with no evidence behind it, and it needs hardware.
+
 ## Deliberate limitations
 
 ### Rate limiting is per-process on the ingest endpoints only
