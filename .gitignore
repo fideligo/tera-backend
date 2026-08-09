@@ -34,3 +34,8 @@ out/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# The proposal is the product source of truth, but a 3.8 MB binary re-committed on every
+# revision bloats history permanently. The authoritative copy is the one submitted to Google
+# Classroom; BUILD_SPEC.md and docs/decisions.md are what this repo needs to carry.
+docs/proposal.pdf
