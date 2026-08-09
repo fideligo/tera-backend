@@ -72,22 +72,37 @@ reconcile it yourself.
 
 ## 2. Repo layout
 
+**The project is three separate repositories**, cloned side by side under one working root. This
+file is identical in all three; it is the shared part. The root above them holds `CLAUDE.md`
+(orientation, canonical copy at `tera-backend/docs/WORKSPACE.md`), which is where the run commands
+live.
+
 ```
-ristek-hackathon/
-  CLAUDE.md            <- this file
-  BUILD_SPEC.md        <- the spec
-  docker-compose.yml   <- Postgres + API
-  backend/             <- Phase 1: FastAPI + SQLAlchemy 2 + Alembic + Postgres  [DONE]
-  dashboard/           <- Phase 2: Next.js clinician + patient views            [PARTIAL]
-  profiler/            <- Phase 3: Flutter device-capability profiler           [BUILDS, UNTESTED ON HW]
-  packages/
-    tera_capture/      <- acquisition layer: Dart + Kotlin, no UI dependency
-  docs/
-    api.md             <- generated from OpenAPI (`tera-docs` CLI)
-    decisions.md       <- one short entry per non-obvious choice
+<working root>/                 <- CLAUDE.md, not a repo itself
+  tera-backend/
+    BUILD_SPEC.md               <- the spec, identical in all three repos
+    CLAUDE.md                   <- this file, identical in all three repos
+    docker-compose.yml          <- Postgres + API
+    backend/                    <- FastAPI + SQLAlchemy 2 + Alembic + Postgres   [DONE]
+    docs/
+      api.md                    <- generated from OpenAPI (`tera-docs` CLI)
+      decisions.md              <- one short entry per non-obvious choice
+      proposal.pdf              <- product authority. UNTRACKED: one copy, back it up
+      WORKSPACE.md              <- canonical copy of the working-root CLAUDE.md
+  tera-web/
+    dashboard/                  <- Next.js clinician + patient views             [PARTIAL]
+  tera-mobile/
+    patient/                    <- the patient capture app                       [NOT ON HW]
+    profiler/                   <- device-capability profiler                    [NOT ON HW]
+    packages/tera_capture/      <- acquisition layer: Dart + Kotlin, no UI dependency
 ```
 
-`mobile/` (the full patient capture app) is **out of scope** — do not scaffold it.
+**The patient app is the main deliverable**, not out of scope. Earlier versions of this file said
+otherwise, from when `mobile/` was deferred; it was built on 8–9 August.
+
+**`docs/decisions.md` has diverged across the three repos.** All three began as copies of one file
+— 67 entries are common — and each has since grown its own. A decision recorded in `tera-web` is
+not visible from `tera-mobile`. Check the other two before concluding something is unrecorded.
 
 ```
 backend/
@@ -104,6 +119,10 @@ backend/
 ```
 
 ## 3. Run commands
+
+**The working root's `CLAUDE.md` is the authority for running everything**, including the patient
+APK build and its two dart-defines. What follows is the same information for the backend, kept here
+because this repo is where you need it; if the two disagree, the root file is newer.
 
 All commands run from the repo root unless stated. Copy `backend/.env.example` to `backend/.env`
 first; it is the only place secrets live and it is git-ignored.
@@ -137,14 +156,14 @@ Tests (needs a real Postgres — arrays, JSONB, partial indexes and triggers are
 
 ```bash
 cd backend
-pytest                              # full suite: 162 tests
-pytest -m invariant                 # the invariant subset: 91 tests
+pytest                              # full suite: 247 tests, ~3m40s
+pytest -m invariant                 # the invariant subset: 159 tests
 ```
 
 `TERA_DATABASE_URL` points at the app database; `TERA_TEST_DATABASE_URL` at the test one. The test
 fixture creates and drops its own database per run, so tests never touch dev data.
 
-Dashboard (Phase 2 — needs the backend running and seeded):
+Dashboard — in **`tera-web/`**, needs the backend running and seeded:
 
 ```bash
 cd dashboard
@@ -152,27 +171,31 @@ cp .env.example .env.local      # fill in the demo passwords from backend/.env
 npm install
 npm run dev                     # http://localhost:3000
 npx tsc --noEmit && npx eslint . && npx next build
+node scripts/screenshots.mjs    # real browser sign-in, 4 pages x desktop/mobile
 ```
 
-Built so far: the palette and design system, the clinician episode summary
-(`/clinician/[episodeId]`) and the patient timeline (`/patient/[episodeId]`). The episode list,
-session detail and device-profile screens are not built yet.
+Built: the design system, login and per-user sessions, the episode list (`/`), the clinician
+episode summary (`/clinician/[episodeId]`) and the patient timeline (`/patient/[episodeId]`).
+Session detail and device-profile screens are not built. **There are no automated tests in this
+repo** — Playwright is present, but only to drive the screenshot script, which asserts nothing.
 
-**Before changing anything in `dashboard/components/RecordCards.tsx`, read BUILD_SPEC 5.2.** That
+**Before changing anything in `dashboard/components/RecordRows.tsx`, read BUILD_SPEC 5.2.** That
 file is invariant 1 expressed in the interface: a cuff reading is a solid fill with large
 numerals, an estimate is an outline with no numerals in the value area, a rejected session is
 dashed and faded. If a change would make an estimate look more like a measurement, the change is
 wrong. `magnitude_sd` must not be rendered in the patient view at all.
 
-Profiler and capture layer (Phase 3 — Android only, minSdk 26):
+Patient app, profiler and capture layer — in **`tera-mobile/`**, Android only, minSdk 26:
 
 ```bash
-cd profiler
+cd patient                      # or profiler, or packages/tera_capture
 flutter pub get
-flutter test                    # 21 tests, no device needed
-flutter build apk --release     # build/app/outputs/flutter-apk/app-release.apk
-adb install -r build/app/outputs/flutter-apk/app-release.apk
+flutter test                    # patient 54, profiler 21, tera_capture 4 — no device needed
+flutter analyze
 ```
+
+The release APK build and its two dart-defines are in the working root's `CLAUDE.md`. Both defines
+matter and one of them is a safety flag — read it there rather than guessing.
 
 The profiler has a **smoke mode** (20 s, 5 s per stage) for debugging HAL behaviour. It returns
 a `SmokeReport`, a separate type from `ProfileResult` with no route to a markdown row or the
@@ -189,9 +212,18 @@ filtering, event detection, beat pairing, or the quality gate — that boundary 
 full in `docs/decisions.md` and is what the patient capture app will build on. If any of those
 five appears in the package, the boundary has moved.
 
+Where those five arrive is `patient/lib/signal/signal_pipeline.dart`, currently an honest stub that
+rejects every session. **The contract for implementing the real chain is in `tera-mobile`'s
+`docs/decisions.md`** — fiducial definition, clock-basis rules, drop policy, constants, error
+contract — with a golden vector and its expected output in `patient/test/fixtures/`.
+
 **The capture paths have never run on real hardware.** The project builds and the statistics are
 unit-tested, but no Android device was available. See `profiler/README.md` for what to check
 first.
+
+An emulator cannot substitute. The eligibility gate requires a torch and a measured 200 Hz
+accelerometer; an emulator has neither, so it refuses before the capture screen and everything
+downstream stays unexercised. The furthest an emulator has reached is the sign-in screen.
 
 ## 4. Conventions
 
