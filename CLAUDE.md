@@ -55,6 +55,11 @@ reconcile it yourself.
 
 ### Where each invariant is enforced and tested
 
+The column below says *where*, and that matters more than it looks. Invariant 8 sat in this table
+for two days listing only `/v1/events` — the backend half — while the half the invariant explicitly
+says must work without a network did not exist on the handset at all. A row naming one side of a
+two-sided property reads as complete. If an invariant has a handset half, name it here.
+
 | # | Enforced in | Named test |
 |---|---|---|
 | 1 | schema has no pressure column on `trend_estimate`; `TrendEstimateOut` schema | `test_trend_estimate_has_no_pressure_column`, `test_no_pressure_value_in_any_estimate_response` |
@@ -64,7 +69,7 @@ reconcile it yourself.
 | 5 | no PUT/PATCH/DELETE routes; append-only trigger on every clinical table | `test_clinical_rows_have_no_update_or_delete_route`, `test_clinical_tables_reject_update_and_delete` (real UPDATE + DELETE per table), `test_audit_log_is_append_only` |
 | 6 | vocabulary guard over responses and summary contents | `test_no_diagnostic_or_medication_advice_language` |
 | 7 | estimate withheld when calibration/quality ambiguous | `test_missing_calibration_yields_no_estimate_and_requests_cuff`, `test_single_deviating_session_does_not_request_cuff`, `test_persistent_deviation_requests_cuff` |
-| 8 | `/v1/events` red-flag response; no estimate returned | `test_red_flag_event_returns_emergency_instruction_and_no_estimate` |
+| 8 | **handset**: `patient/lib/capture/symptom_triage.dart` — triage before capture, pure decision, local instruction constant; `/v1/events` red-flag response is the *record* | `symptom_triage_test.dart` (13, incl. the offline path); `test_red_flag_event_returns_emergency_instruction_and_no_estimate` |
 | 9 | `synthetic` column on every clinical table, surfaced in API | `test_seeded_rows_are_flagged_synthetic_everywhere` |
 | 10 | `app/config.py` — no literal thresholds in logic | `test_thresholds_come_from_config_not_literals` |
 
