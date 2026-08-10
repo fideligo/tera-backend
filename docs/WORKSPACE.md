@@ -102,11 +102,18 @@ node scripts/screenshots.mjs # logs in for real, shoots 4 pages x desktop/mobile
 **Patient app.** From `tera-mobile/patient/` (Android only, minSdk 26):
 
 ```bash
-flutter test                 # 34 tests, no device
+flutter test                 # 87 tests, no device
 flutter build apk --release \
   --dart-define=TERA_API_URL=http://<laptop-lan-ip>:8000 \
   --dart-define=TERA_DEBUG_CAPTURE=false
 ```
+
+Verified 9 August: 45.6 MB APK in about four minutes, `CAMERA` and `HIGH_SAMPLING_RATE_SENSORS`
+confirmed in the merged release manifest. Signed with the debug keystore — the Flutter template's
+TODO is still in `android/app/build.gradle.kts`.
+
+**Putting it on a physical phone: `tera-mobile/HARDWARE_CHECKLIST.md`.** Ordered, with what each
+failure looks like. Read it before the day, not on it.
 
 Both defines matter:
 
