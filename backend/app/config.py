@@ -295,6 +295,33 @@ class SecuritySettings(BaseSettings):
     auth_register_address_window_seconds: int = 3600
 
 
+class RhythmModelSettings(BaseSettings):
+    """The optional rhythm-anomaly model shipped by the ML team.
+
+    **Off by default, and that is the recommendation, not an oversight.** The handoff is explicit:
+    the model powers exactly one field, nothing depends on it, and "a missing flag costs nothing.
+    A false 'irregular rhythm' on a healthy volunteer in front of a judge costs a lot."
+
+    The artefact is a 52 MB scikit-learn pickle. A pickle that size is bound to the scikit-learn
+    version that wrote it — a different version may refuse to load it, or load it and behave
+    subtly differently. Enabling this without pinning that version is how the second failure
+    happens silently.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="TERA_RHYTHM_")
+
+    #: Opt-in. Nothing loads, and nothing is imported, while this is false.
+    enabled: bool = False
+
+    #: Explicit path wins over the search order in ``app/ml/registry.py``.
+    path: str | None = None
+
+    #: Fallback used only when the bundle ships no ``op_threshold``. The handoff calls this out:
+    #: "If op_threshold is absent, tera_ptt prints a loud warning and falls back to 0.5, which is
+    #: not the threshold the model was tuned at." The registry logs at WARNING when it is used.
+    fallback_op_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
 class Settings(BaseSettings):
     """Top-level application settings."""
 
@@ -321,6 +348,7 @@ class Settings(BaseSettings):
     plausibility: PlausibilitySettings = Field(default_factory=PlausibilitySettings)
     device: DeviceEligibilitySettings = Field(default_factory=DeviceEligibilitySettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
+    rhythm_model: RhythmModelSettings = Field(default_factory=RhythmModelSettings)
 
 
 @lru_cache(maxsize=1)

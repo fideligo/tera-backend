@@ -1144,3 +1144,41 @@ places this gate does not protect anyone.
 
 `patient_context` is append-only, so the gate reads the most recent row — a correction takes effect
 on the next request, in both directions. Asserted.
+
+## The rhythm model loads lazily, off by default, and its artefact is not in git
+
+The ML team shipped a 52 MB scikit-learn Random Forest and a 37 MB `model_trees.json`. The loader
+follows the team's previous backend (`JantungSinyal-Backend/ml_service.py`) — prioritised path
+resolution with an env override, defensive handling of both bundle schemas — and differs from it in
+three places, each of which is a failure that backend has.
+
+**Lazy, not at import.** `ml_service.py` runs `_load_model()` at module scope. A missing artefact
+is therefore an `ImportError` that takes down the application and every test that imports near it.
+Here the read happens on first use behind a double-checked lock, and every failure is a *state*:
+`disabled`, `not_found`, `runtime_missing`, `load_failed`. None of them raises.
+
+**Off by default.** `TERA_RHYTHM_ENABLED` must be set. This is the handoff's own recommendation,
+not caution on our part: the model powers exactly one field, nothing else depends on it, and "a
+missing flag costs nothing. A false 'irregular rhythm' on a healthy volunteer in front of a judge
+costs a lot." Disabled does not even look for a path.
+
+**`joblib` and `scikit-learn` are imported inside the function**, not at module top. Neither is a
+dependency of this backend, and the suite has to keep running on a machine with no scientific
+stack. An optional model must not become a mandatory import.
+
+**`op_threshold` is read from the bundle and never assumed.** The adult bundle ships about 0.10;
+the fallback is 0.5. Substituting one for the other silently would change the model's behaviour
+completely, so a bundle without an operating point logs at WARNING and sets
+`op_threshold_is_fallback`, which a caller can see.
+
+**The feature count is checked against the bundle.** Wrong feature order gives a wrong answer with
+no error at all — the handoff calls the order "WAJIB sama persis" — and a count mismatch is the
+part of that this side can actually detect. It fails closed.
+
+**A load failure logs the exception type, never its message.** A pickle error can carry file
+contents, and the deny-list does not help if the string is interpolated into a `detail`. Asserted.
+
+**The artefacts are git-ignored.** 90 MB of binaries in a repo is not version control, and a
+checked-in pickle rots against the scikit-learn version that wrote it. `ml/MODEL_HANDOFF.md` and
+`ml/export_model.py` are tracked; the `.joblib`, `.json` and `.ipynb` are not. Point
+`TERA_RHYTHM_PATH` at a local copy, or drop one in `backend/ml_models/`.

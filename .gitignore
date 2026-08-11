@@ -39,3 +39,11 @@ Thumbs.db
 # revision bloats history permanently. The authoritative copy is the one submitted to Google
 # Classroom; BUILD_SPEC.md and docs/decisions.md are what this repo needs to carry.
 docs/proposal.pdf
+
+# ML artefacts. 52 MB and 37 MB; version control is not an artefact store, and a checked-in
+# pickle rots against the scikit-learn version that wrote it. Point TERA_RHYTHM_PATH at a local
+# copy, or drop one in backend/ml_models/. See docs/decisions.md.
+ml/*.joblib
+ml/*.json
+ml/*.ipynb
+backend/ml_models/
