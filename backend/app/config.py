@@ -286,6 +286,14 @@ class SecuritySettings(BaseSettings):
     auth_refresh_limit_per_address: int = 120
     auth_refresh_address_window_seconds: int = 3600
 
+    # Self-registration, keyed on client address. B2C PIVOT: /v1/auth/register-patient is the
+    # only unauthenticated route that *writes*, so it is the only one where an attacker gets rows
+    # rather than rejections. A real person signs up once; a handful per address per hour covers a
+    # shared connection and a couple of failed attempts, and bounds automated account creation to
+    # something a human notices. An engineering choice, not a validated figure.
+    auth_register_limit_per_address: int = 5
+    auth_register_address_window_seconds: int = 3600
+
 
 class Settings(BaseSettings):
     """Top-level application settings."""

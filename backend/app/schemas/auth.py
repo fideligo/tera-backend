@@ -101,3 +101,34 @@ class UserOut(TeraModel):
     active_sessions: int = Field(
         description="Refresh tokens this account could still present, across all devices."
     )
+
+
+class RegisterPatientRequest(TeraModel):
+    """Self-registration for the standalone consumer app.
+
+    B2C PIVOT. `RegisterRequest` above is admin-only because enrolment used to be clinic-initiated
+    — a clinic opened an episode when it adjusted someone's treatment. In a standalone app there
+    is no clinic to do that, so the account, the patient record and the first monitoring episode
+    are all created by the person signing up.
+
+    There is deliberately no `role` field: this endpoint mints patients and nothing else. A role
+    parameter on a public route is a privilege-escalation surface, and defaulting it would be one
+    typo away from a self-service admin account.
+    """
+
+    subject: str = Field(min_length=3, max_length=128, description="Login identifier.")
+    password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_BYTES)
+
+
+class RegisterPatientResponse(TeraModel):
+    """The new account, its patient record, and the episode opened for it.
+
+    Returns tokens as well, so signing up does not immediately require a second round trip to a
+    login form the user has just filled in.
+    """
+
+    user: UserOut
+    patient_id: uuid.UUID
+    pseudonym: str
+    episode_id: uuid.UUID
+    tokens: TokenResponse

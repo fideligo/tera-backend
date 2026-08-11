@@ -35,7 +35,9 @@ class Patient(UuidPkMixin, SyntheticMixin, Base):
     __tablename__ = "patient"
 
     pseudonym: Mapped[str] = mapped_column(sa.String(64), nullable=False, unique=True)
-    clinic_id: Mapped[str] = mapped_column(sa.String(64), nullable=False, index=True)
+    #: Null for a self-registered B2C patient, who has no clinic behind the account. Kept
+    #: indexed so a later clinic-backed deployment does not need the column rebuilt.
+    clinic_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True, index=True)
     enrolled_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
 
     episodes: Mapped[list["MonitoringEpisode"]] = relationship(back_populates="patient")

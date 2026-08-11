@@ -1012,3 +1012,48 @@ only non-secrets, which is what makes this safe: `backend/.env` points `TERA_DAT
 
 Verified 9 August: a token minted by the containerised API verifies against the 64-byte
 `backend/.env` secret, and the old 42-byte compose string is rejected.
+
+## B2C: a patient no longer needs a clinic
+
+The product is a standalone consumer app. Nobody enrols anyone, and there is no clinic behind an
+account.
+
+**`patient.clinic_id` is now nullable** (0007). That column, not `reviewing_clinician_id`, was the
+real coupling: it was NOT NULL, so a clinic identifier was a precondition for a patient record
+existing at all. `monitoring_episode.reviewing_clinician_id` was already nullable in 0001 and
+needed no change — it was introduced as optional precisely so an episode could exist before a
+clinician was assigned.
+
+**Null, never a placeholder.** `clinic_id` is left null on the patient and the user, and
+`reviewing_clinician_id` null on the episode. A string like `"SELF"` would be a clinic affiliation
+that does not exist, written into a clinical record.
+
+`ClinicianSummaryOut.clinic_id` and `EpisodeListItem.clinic_id` were relaxed to `str | None` to
+match. The full suite caught this immediately, which is the reason the response schemas are
+explicit rather than inferred.
+
+The downgrade **refuses to run** when any patient has a null `clinic_id`. Restoring NOT NULL would
+need a value for every self-registered patient and none would be true.
+
+### `/v1/auth/register-patient`
+
+`/register` stays admin-only. This is a separate route rather than a relaxation of that one,
+because the two have different threat models and merging them would put a role parameter on a
+public endpoint.
+
+- **No `role` field at all.** It mints patients and nothing else. A role parameter on an
+  unauthenticated route is a privilege-escalation surface, and defaulting it is one typo away from
+  a self-service admin account. A request carrying `role` is rejected with 422 rather than ignored.
+- **Account, patient record and first episode in one transaction.** A patient account without a
+  patient record violates the database CHECK, and a patient without an episode has nowhere to
+  record anything, so a partial success is worse than a failure. A duplicate subject creates no
+  orphan patient row — asserted.
+- **Rate limited per address before anything is written.** This is the only unauthenticated route
+  that *writes*, so it is the only one where an attacker gets rows rather than rejections. Five per
+  hour per address: a real person signs up once.
+- **The pseudonym is random, not derived from the subject.** BUILD_SPEC 4.1 has nowhere to put a
+  name, and deriving it from an email address would put one there sideways. Asserted.
+- **`protocol_params` is empty**, so every threshold falls back to `app.config`. Inventing
+  per-episode values would present an engineering default as a clinical decision nobody made.
+- Tokens are returned, so signing up does not immediately require a second round trip to a login
+  form the user has just filled in.

@@ -118,6 +118,35 @@ Request body: `RegisterRequest`
 | `201` | Successful Response |
 | `422` | Validation Error |
 
+### `POST /v1/auth/register-patient`
+
+**Self-registration for the standalone app**
+
+Create a patient account, its patient record and its first monitoring episode.
+
+B2C PIVOT. `/register` above is admin-only because enrolment used to be clinic-initiated. In a
+standalone app there is no clinic to initiate it, so all three rows are created here, in one
+transaction — a patient account without a patient record violates the database CHECK, and a
+patient without an episode has nowhere to record anything, so a partial success is worse than
+a failure.
+
+`clinic_id` is left null on both the user and the patient. A placeholder would be a clinic
+affiliation that does not exist, written into clinical records.
+
+`reviewing_clinician_id` is left null on the episode. The column was optional from 0001, so
+this needs no schema change: an episode has always been able to exist before anyone was
+assigned to review it.
+
+**This is the only unauthenticated route that writes**, so it is rate limited per address
+before anything is created.
+
+Request body: `RegisterPatientRequest`
+
+| Response | Description |
+|---|---|
+| `201` | Successful Response |
+| `422` | Validation Error |
+
 ### `POST /v1/auth/token`
 
 **Exchange credentials for tokens**
@@ -391,7 +420,7 @@ The whole document.
 | `synthetic_notice` | string \| null | no |
 | `episode_id` | string | yes |
 | `patient_pseudonym` | string | yes |
-| `clinic_id` | string | yes |
+| `clinic_id` | string \| null | yes |
 | `started_at` | string | yes |
 | `ended_at` | string \| null | yes |
 | `generated_at` | string | yes |
@@ -521,7 +550,7 @@ Row in the clinician episode list (BUILD_SPEC 5.3 screen 2).
 |---|---|---|
 | `episode_id` | string | yes |
 | `patient_pseudonym` | string | yes |
-| `clinic_id` | string | yes |
+| `clinic_id` | string \| null | yes |
 | `started_at` | string | yes |
 | `ended_at` | string \| null | yes |
 | `synthetic` | boolean | yes |
@@ -622,6 +651,39 @@ Device eligibility verdict returned by POST /v1/device-profiles.
 | Field | Type | Required |
 |---|---|---|
 | `refresh_token` | string | yes |
+
+### `RegisterPatientRequest`
+
+Self-registration for the standalone consumer app.
+
+B2C PIVOT. `RegisterRequest` above is admin-only because enrolment used to be clinic-initiated
+— a clinic opened an episode when it adjusted someone's treatment. In a standalone app there
+is no clinic to do that, so the account, the patient record and the first monitoring episode
+are all created by the person signing up.
+
+There is deliberately no `role` field: this endpoint mints patients and nothing else. A role
+parameter on a public route is a privilege-escalation surface, and defaulting it would be one
+typo away from a self-service admin account.
+
+| Field | Type | Required |
+|---|---|---|
+| `subject` | string | yes |
+| `password` | string | yes |
+
+### `RegisterPatientResponse`
+
+The new account, its patient record, and the episode opened for it.
+
+Returns tokens as well, so signing up does not immediately require a second round trip to a
+login form the user has just filled in.
+
+| Field | Type | Required |
+|---|---|---|
+| `user` | UserOut | yes |
+| `patient_id` | string | yes |
+| `pseudonym` | string | yes |
+| `episode_id` | string | yes |
+| `tokens` | TokenResponse | yes |
 
 ### `RegisterRequest`
 

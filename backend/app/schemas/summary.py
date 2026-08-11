@@ -118,7 +118,8 @@ class ClinicianSummaryOut(SyntheticFlag, TeraModel):
 
     episode_id: uuid.UUID
     patient_pseudonym: str
-    clinic_id: str
+    #: Null for a self-registered B2C patient, who has no clinic behind the account.
+    clinic_id: str | None
     started_at: datetime
     ended_at: datetime | None
     generated_at: datetime
@@ -147,7 +148,8 @@ class EpisodeListItem(TeraModel):
 
     episode_id: uuid.UUID
     patient_pseudonym: str
-    clinic_id: str
+    #: Null for a self-registered B2C patient, who has no clinic behind the account.
+    clinic_id: str | None
     started_at: datetime
     ended_at: datetime | None
     synthetic: bool

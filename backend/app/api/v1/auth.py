@@ -6,6 +6,7 @@ OAuth2 with access and refresh tokens. Recorded in docs/decisions.md.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -21,10 +22,19 @@ from app.api.deps import (
     require_roles,
 )
 from app.logging_config import get_logger
-from app.models import AppUser, AuditAction, Patient, RefreshToken, UserRole
+from app.models import (
+    AppUser,
+    AuditAction,
+    MonitoringEpisode,
+    Patient,
+    RefreshToken,
+    UserRole,
+)
 from app.schemas.auth import (
     LogoutRequest,
     RefreshRequest,
+    RegisterPatientRequest,
+    RegisterPatientResponse,
     RegisterRequest,
     TokenResponse,
     UserOut,
@@ -339,6 +349,129 @@ def read_me(db: DbDep, principal: PrincipalDep) -> UserOut:
         patient_id=user.patient_id,
         created_at=user.created_at,
         active_sessions=refresh_token_service.active_session_count(db, user_id=user.id),
+    )
+
+
+@router.post(
+    "/register-patient",
+    response_model=RegisterPatientResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Self-registration for the standalone app",
+)
+def register_patient(
+    body: RegisterPatientRequest,
+    request: Request,
+    db: DbDep,
+    settings: SettingsDep,
+) -> RegisterPatientResponse:
+    """Create a patient account, its patient record and its first monitoring episode.
+
+    B2C PIVOT. `/register` above is admin-only because enrolment used to be clinic-initiated. In a
+    standalone app there is no clinic to initiate it, so all three rows are created here, in one
+    transaction — a patient account without a patient record violates the database CHECK, and a
+    patient without an episode has nowhere to record anything, so a partial success is worse than
+    a failure.
+
+    `clinic_id` is left null on both the user and the patient. A placeholder would be a clinic
+    affiliation that does not exist, written into clinical records.
+
+    `reviewing_clinician_id` is left null on the episode. The column was optional from 0001, so
+    this needs no schema change: an episode has always been able to exist before anyone was
+    assigned to review it.
+
+    **This is the only unauthenticated route that writes**, so it is rate limited per address
+    before anything is created.
+    """
+    security = settings.security
+    address_limit = authlimit.AuthLimit(
+        bucket="auth_register_address",
+        limit=security.auth_register_limit_per_address,
+        window_seconds=security.auth_register_address_window_seconds,
+    )
+    by_address = authlimit.check(db, address_limit, _client_address(request))
+    if not by_address.allowed:
+        db.commit()
+        log.warning("auth_rate_limited", extra={"bucket": "register_patient"})
+        _deny(by_address, detail="too many sign-up attempts; try again later")
+
+    existing = db.execute(
+        select(AppUser).where(AppUser.subject == body.subject)
+    ).scalar_one_or_none()
+    if existing is not None:
+        # Same shape as /register's conflict. This does leak that a subject is taken, which any
+        # sign-up form does by construction — the alternative is accepting a registration that
+        # silently does nothing.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="that subject is already registered"
+        )
+
+    now = datetime.now(tz=timezone.utc)
+
+    # A pseudonym, not an identifier derived from the subject. BUILD_SPEC 4.1 has nowhere to put
+    # a name, and deriving the pseudonym from an email address would put one there sideways.
+    patient = Patient(
+        pseudonym=f"TERA-{uuid.uuid4().hex[:12].upper()}",
+        clinic_id=None,
+        enrolled_at=now,
+        synthetic=False,
+    )
+    db.add(patient)
+    db.flush()
+
+    user = AppUser(
+        subject=body.subject,
+        password_hash=hash_password(body.password),
+        role=UserRole.PATIENT,
+        clinic_id=None,
+        patient_id=patient.id,
+        synthetic=False,
+    )
+    db.add(user)
+    db.flush()
+
+    episode = MonitoringEpisode(
+        patient_id=patient.id,
+        reviewing_clinician_id=None,
+        started_at=now,
+        ended_at=None,
+        # Empty: every threshold falls back to app.config. A self-registered patient has no
+        # clinician to have chosen a per-episode protocol, and inventing one would present an
+        # engineering default as a clinical decision.
+        protocol_params={},
+        synthetic=False,
+    )
+    db.add(episode)
+    db.flush()
+
+    principal = _principal_for(user)
+    issued = refresh_token_service.issue(
+        db,
+        user_id=user.id,
+        expires_at=now + timedelta(days=security.refresh_token_ttl_days),
+    )
+    tokens = _mint(principal, settings, refresh_jti=issued.jti)
+
+    audit.record(db, principal=principal, action=AuditAction.USER_REGISTERED, target=user.id)
+    audit.record(db, principal=principal, action=AuditAction.AUTH_TOKEN_ISSUED, target=user.id)
+    db.commit()
+
+    # Ids and role only. No subject, no password, no pseudonym.
+    log.info("patient_self_registered", extra={"created_user_id": str(user.id)})
+
+    return RegisterPatientResponse(
+        user=UserOut(
+            id=user.id,
+            subject=user.subject,
+            role=user.role,
+            clinic_id=user.clinic_id,
+            patient_id=user.patient_id,
+            created_at=user.created_at,
+            active_sessions=1,
+        ),
+        patient_id=patient.id,
+        pseudonym=patient.pseudonym,
+        episode_id=episode.id,
+        tokens=tokens,
     )
 
 
