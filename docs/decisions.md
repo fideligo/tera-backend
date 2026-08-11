@@ -992,3 +992,23 @@ state a reviewer is most likely to encounter rather than an idealised one.
 The Compose Postgres publishes on host port **5434**, not 5432 or 5433 — both were already taken
 by other Postgres instances on the development machine. Change it in `docker-compose.yml` and
 `backend/.env` together if that does not suit.
+
+## Compose takes the JWT secret from `backend/.env` via `env_file`, not `${VAR}`
+
+The API container signed tokens with a 42-byte string hardcoded in `docker-compose.yml`, while
+every host process — pytest, the CLIs, a local uvicorn — used the 64-byte value in `backend/.env`.
+A token minted by one was rejected by the other, and nothing said so: the failure surfaced as a 401
+that looks identical to a wrong password.
+
+`${TERA_JWT_SECRET}` substitution cannot fix it. Compose resolves `${VAR}` from a `.env` **beside
+the compose file**, which is `tera-backend/.env` — a file that does not exist and must not, because
+the secret already lives one directory down and duplicating it recreates the same divergence in a
+new place.
+
+`env_file: ./backend/.env` reaches the real file. The `environment:` block is kept and now carries
+only non-secrets, which is what makes this safe: `backend/.env` points `TERA_DATABASE_URL` at
+`localhost:5434`, correct from the host and wrong from inside the compose network, and
+`environment:` overrides `env_file:` so the container keeps `db:5432`.
+
+Verified 9 August: a token minted by the containerised API verifies against the 64-byte
+`backend/.env` secret, and the old 42-byte compose string is rejected.

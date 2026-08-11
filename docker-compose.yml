@@ -18,14 +18,22 @@ services:
   api:
     build:
       context: ./backend
+    # Secrets come from backend/.env — the same file the host venv, the CLIs and pytest read.
+    #
+    # Compose's ${VAR} substitution reads a .env beside THIS file, not backend/.env, so it cannot
+    # reach the real secret. env_file can. TERA_JWT_SECRET therefore arrives here as the same
+    # 64-byte value the host uses, instead of the hardcoded 42-byte string that used to sit below:
+    # a token minted by a host process was rejected by the container and vice versa.
+    env_file:
+      - ./backend/.env
+    # These override anything of the same name in env_file, which is what makes the arrangement
+    # safe: backend/.env points the database at localhost:5434 (correct from the host, wrong from
+    # inside this network), and the value here wins.
     environment:
       TERA_DATABASE_URL: postgresql+psycopg://tera:tera_dev_password@db:5432/tera
       TERA_TEST_DATABASE_URL: postgresql+psycopg://tera:tera_dev_password@db:5432/tera_test
       TERA_ENV: development
       TERA_LOG_LEVEL: INFO
-      # Development-only value. Production supplies TERA_JWT_SECRET from the environment;
-      # app startup refuses to run with the built-in default when TERA_ENV=production.
-      TERA_JWT_SECRET: dev-only-compose-secret-not-for-production
     depends_on:
       db:
         condition: service_healthy
