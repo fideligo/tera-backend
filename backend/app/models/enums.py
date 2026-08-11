@@ -151,6 +151,7 @@ class AuditAction(str, Enum):
     SESSION_SUBMITTED = "session_submitted"
     SESSION_DUPLICATE_REPLAYED = "session_duplicate_replayed"
     CUFF_READING_RECORDED = "cuff_reading_recorded"
+    PATIENT_CONTEXT_RECORDED = "patient_context_recorded"
     CALIBRATION_ESTABLISHED = "calibration_established"
     CALIBRATION_SUPERSEDED = "calibration_superseded"
     EVENT_RECORDED = "event_recorded"
@@ -163,3 +164,16 @@ class AuditAction(str, Enum):
     AUTH_REFRESH_REUSE_DETECTED = "auth_refresh_reuse_detected"
     USER_REGISTERED = "user_registered"
     CLINICIAN_ACCESS_DENIED = "clinician_access_denied"
+
+
+class PregnancyAnswer(str, Enum):
+    """Three-valued on purpose.
+
+    A patient who declines to answer has given a different answer from "no". Collapsing the two
+    would record a statement they did not make, and only ``YES`` closes the safety gate — see
+    ``docs/decisions.md``.
+    """
+
+    YES = "yes"
+    NO = "no"
+    PREFER_NOT_TO_SAY = "prefer_not_to_say"

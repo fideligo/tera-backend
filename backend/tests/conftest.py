@@ -255,6 +255,8 @@ def populated_clinical_tables(
         DeviationState,
         MeasurementSession,
         MedicationEvent,
+        PatientContext,
+        PregnancyAnswer,
         RedFlagEvent,
         SymptomEvent,
         TrendDirection,
@@ -323,6 +325,16 @@ def populated_clinical_tables(
                 payload={"note": "fixture"},
             )
         )
+
+    db.add(
+        PatientContext(
+            patient_id=episode.patient_id,
+            recorded_at=base + timedelta(days=6),
+            medications=[{"name": "fixture", "dose": "1 mg"}],
+            pregnant=PregnancyAnswer.NO,
+            known_arrhythmia=False,
+        )
+    )
 
     db.add(ClinicianSummary(episode_id=episode.id, contents={"note": "fixture"}))
     db.add(

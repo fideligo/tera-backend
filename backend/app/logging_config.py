@@ -52,9 +52,18 @@ DENIED_FIELDS: frozenset[str] = frozenset(
         "payload",
         "contents",
         "medication",
+        "medications",
         "medication_name",
         "dose",
         "dosage",
+        # B2C intake context. Pregnancy and rhythm history are clinical facts about a person,
+        # not system state, and belong in the record rather than in a log line.
+        "pregnant",
+        "pregnancy",
+        "arrhythmia",
+        "known_arrhythmia",
+        "regimen",
+        "last_regimen_change_date",
         # Credentials.
         "password",
         "token",

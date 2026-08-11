@@ -11,6 +11,7 @@ from app.models.clinical import (
     ClinicianSummary,
     CuffReading,
     MedicationEvent,
+    PatientContext,
     RedFlagEvent,
     SymptomEvent,
 )
@@ -24,6 +25,7 @@ from app.models.enums import (
     DeviationState,
     EventType,
     Posture,
+    PregnancyAnswer,
     QualifiedStatus,
     RejectionReason,
     SessionStatus,
@@ -56,6 +58,7 @@ CLINICAL_TABLES: tuple[str, ...] = (
     "clinician_summary",
     "audit_log",
     "calibration_source_session",
+    "patient_context",
 )
 
 __all__ = [
@@ -94,4 +97,6 @@ __all__ = [
     "TrendEstimate",
     "UserRole",
     "CLINICAL_TABLES",
+    "PatientContext",
+    "PregnancyAnswer",
 ]

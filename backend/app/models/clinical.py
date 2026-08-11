@@ -16,7 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, RecordedAtMixin, SyntheticMixin, UuidPkMixin, utcnow
 from app.models.core import enum_column
-from app.models.enums import CuffSource
+from app.models.enums import CuffSource, PregnancyAnswer
 
 # Plausibility ranges are given verbatim in BUILD_SPEC 4.1 and must exist at database level.
 # They mirror PlausibilitySettings; the config values are what the API rejects on, these are the
@@ -158,3 +158,57 @@ class ClinicianSummary(UuidPkMixin, SyntheticMixin, Base):
     )
     viewed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     contents: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+
+class PatientContext(UuidPkMixin, SyntheticMixin, Base):
+    """Clinical context the patient supplies about themselves.
+
+    B2C PIVOT: with no clinic behind the account this is the only source of medication, pregnancy
+    and rhythm history, and the only place a contraindication can be caught.
+
+    **Append-only, latest-wins on read** (invariant 5). A changed answer inserts a new row; the
+    previous one stays, because what the patient said in June is a fact about June and a session
+    captured then should be read against the context in force at the time.
+    """
+
+    __tablename__ = "patient_context"
+
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        sa.ForeignKey("patient.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    last_regimen_change_date: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    #: ``[{"name": ..., "dose": ...}]``. Bounded by the request schema, not by the column.
+    medications: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default=sa.text("'[]'::jsonb"), default=list
+    )
+    pregnant: Mapped[PregnancyAnswer] = mapped_column(
+        enum_column(PregnancyAnswer, "pregnancy_answer"), nullable=False
+    )
+    known_arrhythmia: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+
+    #: All three or none — a systolic with no date is not a reading. A CHECK holds them together.
+    last_clinic_systolic_mmhg: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    last_clinic_diastolic_mmhg: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    last_clinic_taken_on: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "(last_clinic_systolic_mmhg IS NULL) = (last_clinic_diastolic_mmhg IS NULL) AND "
+            "(last_clinic_systolic_mmhg IS NULL) = (last_clinic_taken_on IS NULL)",
+            name="ck_patient_context_clinic_bp_all_or_nothing",
+        ),
+        sa.CheckConstraint(
+            "last_clinic_systolic_mmhg IS NULL OR "
+            "last_clinic_systolic_mmhg > last_clinic_diastolic_mmhg",
+            name="ck_patient_context_clinic_bp_ordered",
+        ),
+        sa.Index("ix_patient_context_patient_recorded", "patient_id", "recorded_at"),
+    )

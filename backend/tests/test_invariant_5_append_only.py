@@ -55,6 +55,8 @@ _UPDATE_TARGET_COLUMN = {
     "clinician_summary": ("viewed_at", "now()"),
     "audit_log": ("actor", "'someone-else'"),
     "calibration_source_session": ("session_ptt_ms", "999.0"),
+    # Rewriting a pregnancy answer is exactly the mutation this table exists to prevent.
+    "patient_context": ("known_arrhythmia", "true"),
 }
 
 
@@ -101,23 +103,27 @@ def test_every_clinical_table_is_covered_by_the_update_delete_test() -> None:
 
 
 @pytest.mark.invariant
-def test_clinical_tables_match_the_migrations_trigger_list() -> None:
+def test_clinical_tables_match_the_migrations_trigger_list(db) -> None:
     """The application's idea of "clinical" and the migration's must agree.
 
     A table in the migration but not in ``CLINICAL_TABLES`` goes untested; a table in
     ``CLINICAL_TABLES`` but not in the migration has no trigger at all. Both have happened.
     """
-    import importlib.util
-    from pathlib import Path
+    # Asks the database which triggers exist rather than parsing one migration file. Clinical
+    # tables can arrive in later migrations — patient_context did, in 0008 — and a check pinned to
+    # 0001 would have to be edited every time, which is exactly how the two lists drifted before.
+    installed = {
+        row[0]
+        for row in db.execute(
+            sa.text(
+                "SELECT c.relname FROM pg_trigger t "
+                "JOIN pg_class c ON c.oid = t.tgrelid "
+                "WHERE NOT t.tgisinternal AND t.tgname LIKE 'trg\_%\_append\_only'"
+            )
+        ).all()
+    }
 
-    migration_path = (
-        Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0001_initial_schema.py"
-    )
-    spec = importlib.util.spec_from_file_location("_tera_initial_migration", migration_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    assert set(module.APPEND_ONLY_TABLES) == set(CLINICAL_TABLES)
+    assert installed == set(CLINICAL_TABLES)
 
 
 @pytest.mark.invariant

@@ -304,6 +304,32 @@ Request body: `EventCreate`
 | `201` | Successful Response |
 | `422` | Validation Error |
 
+### `GET /v1/patient-context`
+
+**The patient's context currently in force**
+
+The most recent row. 404 when the patient has never filled the form in.
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+
+### `POST /v1/patient-context`
+
+**Record the patient's clinical context**
+
+File a new context row for the authenticated patient.
+
+The patient is taken from the token and there is no ``patient_id`` in the body, so context
+cannot be filed against somebody else's record by editing a request.
+
+Request body: `PatientContextCreate`
+
+| Response | Description |
+|---|---|
+| `201` | Successful Response |
+| `422` | Validation Error |
+
 ### `POST /v1/sessions`
 
 **Submit an accepted or rejected session**
@@ -617,6 +643,13 @@ Ending a session means revoking its refresh token; the access token expires on i
 | `refresh_token` | string \| null | no |
 | `all_sessions` | boolean | no |
 
+### `MedicationIn`
+
+| Field | Type | Required |
+|---|---|---|
+| `name` | string | yes |
+| `dose` | string | no |
+
 ### `NextAction`
 
 What the patient should do next.
@@ -638,9 +671,53 @@ Response of POST /v1/sessions/nonce.
 | `nonce` | string | yes |
 | `expires_at` | string | yes |
 
+### `PatientContextCreate`
+
+The five intake fields.
+
+``patient_id`` is deliberately absent: it comes from the token, so a patient cannot file
+context against somebody else's record by editing a request body.
+
+| Field | Type | Required |
+|---|---|---|
+| `last_regimen_change_date` | string \| null | no |
+| `medications` | array of MedicationIn | no |
+| `pregnant` | PregnancyAnswer | yes |
+| `known_arrhythmia` | boolean | yes |
+| `last_clinic_systolic_mmhg` | integer \| null | no |
+| `last_clinic_diastolic_mmhg` | integer \| null | no |
+| `last_clinic_taken_on` | string \| null | no |
+
+### `PatientContextOut`
+
+The context in force. Append-only, so this is the most recent row, not the only one.
+
+| Field | Type | Required |
+|---|---|---|
+| `synthetic` | boolean | yes |
+| `synthetic_notice` | string \| null | no |
+| `id` | string | yes |
+| `patient_id` | string | yes |
+| `recorded_at` | string | yes |
+| `last_regimen_change_date` | string \| null | yes |
+| `medications` | array of MedicationIn | yes |
+| `pregnant` | PregnancyAnswer | yes |
+| `known_arrhythmia` | boolean | yes |
+| `last_clinic_systolic_mmhg` | integer \| null | yes |
+| `last_clinic_diastolic_mmhg` | integer \| null | yes |
+| `last_clinic_taken_on` | string \| null | yes |
+
 ### `Posture`
 
 Posture during capture. Recorded because posture shifts PTT independently of pressure.
+
+### `PregnancyAnswer`
+
+Three-valued on purpose.
+
+A patient who declines to answer has given a different answer from "no". Collapsing the two
+would record a statement they did not make, and only ``YES`` closes the safety gate — see
+``docs/decisions.md``.
 
 ### `QualifiedStatus`
 

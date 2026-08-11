@@ -1057,3 +1057,53 @@ public endpoint.
   per-episode values would present an engineering default as a clinical decision nobody made.
 - Tokens are returned, so signing up does not immediately require a second round trip to a login
   form the user has just filled in.
+
+## `patient_context`: the intake reaches the server, append-only
+
+The intake was handset-only, so it vanished on uninstall and the server could not see a
+contraindication it is expected to respect.
+
+**Append-only, latest-wins on read** (invariant 5), with the shared `tera_append_only_guard`
+trigger. A changed answer inserts a row and the previous one stays: what the patient said in June
+is a fact about June, and a session captured then should be read against the context in force at
+the time. Same reasoning as `calibration`.
+
+**The patient comes from the token.** `PatientContextCreate` has no `patient_id`, so filing context
+against somebody else's record is not expressible. A body carrying one is rejected — `TeraModel`
+forbids unknown fields.
+
+**`last_clinic_*` is three columns, not JSONB**, so a CHECK can hold them together: all three
+present or all three absent, systolic above diastolic. A systolic with no date is not a reading.
+The request schema says the same thing, so a client gets 422 rather than a constraint violation.
+
+**The medication list is bounded at 32.** Invariant 2 in spirit — an unbounded JSONB column on an
+ingest route is where a series ends up.
+
+`pregnant` is a real Postgres enum, three-valued, matching the handset. The `audit_action` value
+`patient_context_recorded` is added by `ALTER TYPE ... ADD VALUE`, and the downgrade leaves it: an
+enum value cannot be dropped without rewriting the type, as in 0003.
+
+**The deny-list grew with the table.** `pregnant`, `pregnancy`, `arrhythmia`, `known_arrhythmia`,
+`regimen` and `medications` are now denied field names. The new route logs an id and a count and
+nothing else, but the deny-list is what makes that hold for the next person too.
+
+### The trigger-list test now asks the database
+
+`test_clinical_tables_match_the_migrations_trigger_list` parsed `0001`'s `APPEND_ONLY_TABLES`.
+`patient_context` arrives in `0008`, so that check would have failed for a table that is correctly
+configured — and pinning it to one file is how the two lists drifted apart the first time. It now
+queries `pg_trigger` for `trg_%_append_only` and compares against `CLINICAL_TABLES`, which is true
+of the database rather than of one migration.
+
+## Mobile: local first, server second
+
+`PatientContextSubmitter` posts the intake after the local write, and **never throws, never blocks,
+and never gates**. The handset copy is what `ContextIntakeSafety` reads, so a contraindication
+holds on a dead network; a patient who reported one is blocked whether or not the server heard.
+
+The wire shape is flat — `last_clinic_systolic_mmhg` and friends — rather than the nested
+`last_clinic_bp` the local JSON uses, matching the columns. One mapping, in one place, asserted by
+a test.
+
+A failed upload is stated on the screen rather than apologised for: saved here, not yet in your
+account, save again when you are back online.
