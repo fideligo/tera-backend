@@ -831,6 +831,7 @@ Patient-facing session detail (drives the Phase 2 session-detail screen).
 | `n_beats_total` | integer | yes |
 | `n_beats_usable` | integer | yes |
 | `quality` | object | yes |
+| `trend_withheld` | string \| null | no |
 | `trend` | TrendEstimateOut \| null | no |
 | `rejection` | RejectionOut \| null | no |
 

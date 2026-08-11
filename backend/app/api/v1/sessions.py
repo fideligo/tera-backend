@@ -33,7 +33,7 @@ from app.models import AuditAction, DeviceProfile, MeasurementSession
 from app.schemas.common import SyntheticFlag
 from app.schemas.session import NonceOut, SessionAccepted, SessionDetailOut, SessionSubmit
 from app.security.nonce import NonceError, consume_nonce, issue_nonce
-from app.services import audit, ingest
+from app.services import audit, contraindication, ingest, language
 from app.services.ingest import PayloadRejected
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -116,6 +116,10 @@ def submit_session(
 
     episode = load_episode(body.episode_id, principal, db)
 
+    # Before anything about this capture is written. The handset already refuses this, in pure Dart so it survives a dead network;
+    # this is the same rule enforced against whatever actually called the API.
+    contraindication.assert_not_contraindicated(db, episode.patient_id)
+
     device_profile = db.get(DeviceProfile, body.device_profile_id)
     if device_profile is None:
         raise HTTPException(
@@ -183,7 +187,12 @@ def get_session(
     if stored is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
 
-    load_episode(stored.episode_id, principal, db)  # authorisation, result unused
+    episode = load_episode(stored.episode_id, principal, db)  # authorisation
+
+    # Estimates recorded before pregnancy was reported are not deleted (invariant 5) and are
+    # not served either. The session itself stays visible — withholding the record as well
+    # would hide the patient's own history from them.
+    withhold_trend = contraindication.is_contraindicated(db, episode.patient_id)
 
     return SessionDetailOut(
         session_id=stored.id,
@@ -200,8 +209,11 @@ def get_session(
         synthetic=stored.synthetic,
         synthetic_notice=SyntheticFlag.notice_for(stored.synthetic),
         trend=(
-            ingest.build_estimate_out(stored.estimate) if stored.estimate is not None else None
+            None
+            if withhold_trend or stored.estimate is None
+            else ingest.build_estimate_out(stored.estimate)
         ),
+        trend_withheld=(language.CONTRAINDICATED_PREGNANCY if withhold_trend else None),
         rejection=(
             ingest.build_rejection_out(stored.rejection_reason)
             if stored.rejection_reason is not None

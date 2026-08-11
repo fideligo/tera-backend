@@ -167,5 +167,8 @@ class SessionDetailOut(SyntheticFlag, TeraModel):
     n_beats_total: int
     n_beats_usable: int
     quality: dict
+    #: Set when a stored estimate exists but is being withheld. Invariant 6: it names the
+    #: limitation and refers on, and says nothing about what the estimate would have shown.
+    trend_withheld: str | None = None
     trend: TrendEstimateOut | None = None
     rejection: RejectionOut | None = None

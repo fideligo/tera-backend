@@ -18,7 +18,7 @@ from app.logging_config import get_logger
 from app.models import AuditAction, Calibration
 from app.schemas.clinical import CalibrationCreate, CalibrationOut
 from app.schemas.common import SyntheticFlag
-from app.services import audit
+from app.services import audit, contraindication
 from app.services import calibration as calibration_service
 from app.services.calibration import CalibrationError
 
@@ -44,6 +44,10 @@ def create_calibration(
     never touched — a database trigger enforces that independently of this route (invariant 4).
     """
     assert_patient_scope(principal, body.patient_id)
+
+    # A baseline exists only so that estimates can be computed against it, so establishing one
+    # for a contraindicated patient is the same refusal one step earlier.
+    contraindication.assert_not_contraindicated(db, body.patient_id)
 
     try:
         established = calibration_service.establish(

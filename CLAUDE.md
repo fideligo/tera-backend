@@ -72,6 +72,7 @@ two-sided property reads as complete. If an invariant has a handset half, name i
 | 8 | **handset**: `patient/lib/capture/symptom_triage.dart` — triage before capture, pure decision, local instruction constant; `/v1/events` red-flag response is the *record* | `symptom_triage_test.dart` (13, incl. the offline path); `test_red_flag_event_returns_emergency_instruction_and_no_estimate` |
 | 9 | `synthetic` column on every clinical table, surfaced in API | `test_seeded_rows_are_flagged_synthetic_everywhere` |
 | 10 | `app/config.py` — no literal thresholds in logic | `test_thresholds_come_from_config_not_literals` |
+| C | **contraindication, both halves**: handset `patient/lib/capture/context_intake.dart` (pure, offline); server `app/services/contraindication.py` — 403 on session ingest and calibration, trend withheld on read | `test_invariant_contraindication.py` (11); `context_intake_test.dart` (25) |
 
 ---
 
@@ -163,8 +164,8 @@ Tests (needs a real Postgres — arrays, JSONB, partial indexes and triggers are
 
 ```bash
 cd backend
-pytest                              # full suite: 273 tests, ~8m
-pytest -m invariant                 # the invariant subset: 159 tests
+pytest                              # full suite: 284 tests, ~7m
+pytest -m invariant                 # the invariant subset: 171 tests
 ```
 
 `TERA_DATABASE_URL` points at the app database; `TERA_TEST_DATABASE_URL` at the test one. The test

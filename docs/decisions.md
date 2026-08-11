@@ -1107,3 +1107,40 @@ a test.
 
 A failed upload is stated on the screen rather than apologised for: saved here, not yet in your
 account, save again when you are back online.
+
+## The pregnancy contraindication is enforced on the server too
+
+The handset refuses a spot check when pregnancy is reported, in pure Dart so it survives a dead
+network. It is also **only a client**. An older build, a replayed request, a second client, or
+anyone holding a token reaches the API directly, and the server would happily have produced a trend
+estimate for a patient the method was never validated on. A safety rule that exists in one of two
+halves is a safety rule that exists in neither.
+
+`app/services/contraindication.py` reads the latest `patient_context` row and refuses in three
+places:
+
+- `POST /v1/sessions` — **403, before anything about the capture is written.**
+- `POST /v1/calibrations` — **403.** A baseline exists only so estimates can be computed against
+  it, so this is the same refusal one step earlier.
+- `GET /v1/sessions/{id}` — the trend block is withheld and `trend_withheld` carries the reason.
+  The session record stays visible: withholding a patient's own history from them is not what this
+  gate is for.
+
+**403, not a rejected session.** Invariant 3 keeps sessions the system *processed and found
+unusable* — a fact about the capture, which the clinician summary reports. This is not that: the
+refusal is a property of the patient, nothing about the signal was examined, and the shape matches
+the existing 422 for a malformed payload and 404 for an unknown device profile, both of which
+already refuse without storing. Recording it as a rejected session would also write a row stating a
+pregnancy into an append-only table on every attempt.
+
+**Estimates recorded before pregnancy was reported are not deleted** (invariant 5). They are not
+served either.
+
+**The gate matches the handset exactly, including its weak edges.** Only `yes` blocks.
+`prefer_not_to_say` does not, because blocking a declined answer makes declining functionally
+identical to saying yes. A patient who never filled the form in is not blocked, because the intake
+is not a precondition for using the app. Both are deliberate, both are asserted, and both are the
+places this gate does not protect anyone.
+
+`patient_context` is append-only, so the gate reads the most recent row — a correction takes effect
+on the next request, in both directions. Asserted.

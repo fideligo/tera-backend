@@ -74,6 +74,16 @@ ACTION_SEEK_EMERGENCY_CARE = (
     "department. Do not wait for a measurement."
 )
 
+#: Server-side contraindication gate. The handset holds a copy of the first sentence in
+#: ``context_intake.dart``; this is the one the API returns.
+#:
+#: Invariant 6 applies here as everywhere: it names the limitation and refers on. It does not say
+#: what the reading might have shown, does not estimate risk, and does not reassure.
+CONTRAINDICATED_PREGNANCY = (
+    "Method unvalidated in pregnancy. Please consult your doctor. Tera does not produce trend "
+    "estimates while pregnancy is recorded on this account."
+)
+
 # --------------------------------------------------------------------------- rejection wording
 
 #: Plain-language rejection text for the patient (BUILD_SPEC 5.4). Every one of these describes
@@ -192,6 +202,7 @@ def all_user_facing_strings() -> dict[str, str]:
         "ACTION_CUFF_REQUESTED_NO_CALIBRATION": ACTION_CUFF_REQUESTED_NO_CALIBRATION,
         "ACTION_CUFF_REQUESTED_SESSION_UNUSABLE": ACTION_CUFF_REQUESTED_SESSION_UNUSABLE,
         "ACTION_SEEK_EMERGENCY_CARE": ACTION_SEEK_EMERGENCY_CARE,
+        "CONTRAINDICATED_PREGNANCY": CONTRAINDICATED_PREGNANCY,
         "CONFIDENCE_NOTICE": CONFIDENCE_NOTICE,
         "MAGNITUDE_NOTICE": MAGNITUDE_NOTICE,
         "SYNTHETIC_NOTICE": SYNTHETIC_NOTICE,
