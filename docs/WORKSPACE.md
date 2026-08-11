@@ -1,6 +1,6 @@
 # CLAUDE.md — Tera working root
 
-This is the folder above the three repos, not a repo itself. Read this before entering any of
+This is the folder above the two repos, not a repo itself. Read this before entering any of
 them; it exists so you never have to re-read `proposal.pdf` to start work.
 
 The canonical copy is committed at `tera-backend/docs/WORKSPACE.md`. If this root file is ever
@@ -15,26 +15,31 @@ stiffness is changing. PTT tracks *change*, never absolute pressure; a validated
 sets the personal baseline and remains the only source of a mmHg number. The value proposition is
 portability and record completeness, not "no more cuff".
 
-## The three repos
+## The two repos
 
 | Repo | Contains | Detailed authority |
 |---|---|---|
 | `tera-backend/` | FastAPI + SQLAlchemy 2 + Alembic + Postgres, `docker-compose.yml`, seed/replay/docs CLIs. Also the docs home: `docs/api.md`, `docs/proposal.pdf`. | `BUILD_SPEC.md`, `docs/decisions.md` |
-| `tera-web/` | `dashboard/` — Next.js clinician summary, patient timeline, episode list, login. Design system and `@theme` tokens live here. | `BUILD_SPEC.md`, `docs/decisions.md` |
 | `tera-mobile/` | `patient/` (the capture app), `profiler/` (device-capability harness), `packages/tera_capture` (acquisition layer, Dart + Kotlin, no UI dependency). | `BUILD_SPEC.md`, `docs/decisions.md` |
 
 Each repo also carries its own `CLAUDE.md`. Those are the per-repo detail; this file is the
 orientation above them.
 
-**`decisions.md` has diverged.** All three began as copies of one file — 67 entries are common —
-and each has since grown its own. A decision recorded in `tera-web` is not visible from
-`tera-mobile`. When a decision spans repos, check the other two before assuming it is unrecorded.
+**`tera-web` is out of scope.** The product is a standalone B2C app: the patient is the user, and
+there is no clinician dashboard in it. The clone may still be on disk and its git history is intact
+— nothing has been deleted — but it is not built, not tested, not demonstrated, and not to be
+worked on. Anything it needs from the backend is frozen at whatever is already there.
+
+**`decisions.md` has diverged.** Both files began as copies of one — 67 entries are common — and
+each has since grown its own. A decision recorded in one is not visible from the other. When a
+decision spans both, check the other before assuming it is unrecorded. `tera-web`'s copy still
+holds the design-system reasoning, which is the one reason to open that repo.
 
 ## Authority split
 
 - **`proposal.pdf`** (in `tera-backend/docs/`) — product scope, clinical constraints, device
   thresholds, success metrics. The judge-facing promise.
-- **`BUILD_SPEC.md`** (identical in all three repos) — API surface, payloads, schema.
+- **`BUILD_SPEC.md`** (identical in both repos) — API surface, payloads, schema.
 - **`docs/decisions.md`** — every decision already taken, and why. Read before re-opening one.
 
 If those three disagree, the invariants in the per-repo `CLAUDE.md` win, and you stop and ask.
@@ -87,22 +92,13 @@ was seeded from the host. To recreate it:
 ```bash
 cd backend && source .venv/Scripts/activate   # or .venv/Scripts/activate on cmd
 tera-seed-demo                                # one 4-week synthetic episode, all rows flagged synthetic
-pytest                                        # 247 tests; pytest -m invariant for the 159 invariant ones
-```
-
-**Dashboard.** From `tera-web/dashboard/` (needs the backend up and seeded):
-
-```bash
-cp .env.example .env.local   # fill the demo passwords from tera-backend/backend/.env
-npm install && npm run dev   # http://localhost:3000
-npx tsc --noEmit && npx eslint . && npx next build
-node scripts/screenshots.mjs # logs in for real, shoots 4 pages x desktop/mobile into screenshots/
+pytest                                        # 273 tests; pytest -m invariant for the 159 invariant ones
 ```
 
 **Patient app.** From `tera-mobile/patient/` (Android only, minSdk 26):
 
 ```bash
-flutter test                 # 87 tests, no device
+flutter test                 # 125 tests, no device
 flutter build apk --release \
   --dart-define=TERA_API_URL=http://<laptop-lan-ip>:8000 \
   --dart-define=TERA_DEBUG_CAPTURE=false

@@ -77,16 +77,16 @@ two-sided property reads as complete. If an invariant has a handset half, name i
 
 ## 2. Repo layout
 
-**The project is three separate repositories**, cloned side by side under one working root. This
-file is identical in all three; it is the shared part. The root above them holds `CLAUDE.md`
+**The project is two repositories**, cloned side by side under one working root. This file is
+identical in both; it is the shared part. The root above them holds `CLAUDE.md`
 (orientation, canonical copy at `tera-backend/docs/WORKSPACE.md`), which is where the run commands
 live.
 
 ```
 <working root>/                 <- CLAUDE.md, not a repo itself
   tera-backend/
-    BUILD_SPEC.md               <- the spec, identical in all three repos
-    CLAUDE.md                   <- this file, identical in all three repos
+    BUILD_SPEC.md               <- the spec, identical in both repos
+    CLAUDE.md                   <- this file, identical in both repos
     docker-compose.yml          <- Postgres + API
     backend/                    <- FastAPI + SQLAlchemy 2 + Alembic + Postgres   [DONE]
     docs/
@@ -94,8 +94,6 @@ live.
       decisions.md              <- one short entry per non-obvious choice
       proposal.pdf              <- product authority. UNTRACKED: one copy, back it up
       WORKSPACE.md              <- canonical copy of the working-root CLAUDE.md
-  tera-web/
-    dashboard/                  <- Next.js clinician + patient views             [PARTIAL]
   tera-mobile/
     patient/                    <- the patient capture app                       [NOT ON HW]
     profiler/                   <- device-capability profiler                    [NOT ON HW]
@@ -105,9 +103,13 @@ live.
 **The patient app is the main deliverable**, not out of scope. Earlier versions of this file said
 otherwise, from when `mobile/` was deferred; it was built on 8–9 August.
 
-**`docs/decisions.md` has diverged across the three repos.** All three began as copies of one file
-— 67 entries are common — and each has since grown its own. A decision recorded in `tera-web` is
-not visible from `tera-mobile`. Check the other two before concluding something is unrecorded.
+**`tera-web` is out of scope.** The product is a standalone B2C app: the patient is the user and
+there is no clinician dashboard in it. The clone may still be on disk with its history intact —
+nothing has been deleted — but it is not built, tested, demonstrated or worked on.
+
+**`docs/decisions.md` has diverged.** Both files began as copies of one — 67 entries are common —
+and each has since grown its own. Check the other before concluding something is unrecorded.
+`tera-web`'s copy still holds the design-system reasoning, which is the one reason to open it.
 
 ```
 backend/
@@ -161,41 +163,19 @@ Tests (needs a real Postgres — arrays, JSONB, partial indexes and triggers are
 
 ```bash
 cd backend
-pytest                              # full suite: 247 tests, ~3m40s
+pytest                              # full suite: 273 tests, ~8m
 pytest -m invariant                 # the invariant subset: 159 tests
 ```
 
 `TERA_DATABASE_URL` points at the app database; `TERA_TEST_DATABASE_URL` at the test one. The test
 fixture creates and drops its own database per run, so tests never touch dev data.
 
-Dashboard — in **`tera-web/`**, needs the backend running and seeded:
-
-```bash
-cd dashboard
-cp .env.example .env.local      # fill in the demo passwords from backend/.env
-npm install
-npm run dev                     # http://localhost:3000
-npx tsc --noEmit && npx eslint . && npx next build
-node scripts/screenshots.mjs    # real browser sign-in, 4 pages x desktop/mobile
-```
-
-Built: the design system, login and per-user sessions, the episode list (`/`), the clinician
-episode summary (`/clinician/[episodeId]`) and the patient timeline (`/patient/[episodeId]`).
-Session detail and device-profile screens are not built. **There are no automated tests in this
-repo** — Playwright is present, but only to drive the screenshot script, which asserts nothing.
-
-**Before changing anything in `dashboard/components/RecordRows.tsx`, read BUILD_SPEC 5.2.** That
-file is invariant 1 expressed in the interface: a cuff reading is a solid fill with large
-numerals, an estimate is an outline with no numerals in the value area, a rejected session is
-dashed and faded. If a change would make an estimate look more like a measurement, the change is
-wrong. `magnitude_sd` must not be rendered in the patient view at all.
-
 Patient app, profiler and capture layer — in **`tera-mobile/`**, Android only, minSdk 26:
 
 ```bash
 cd patient                      # or profiler, or packages/tera_capture
 flutter pub get
-flutter test                    # patient 54, profiler 21, tera_capture 4 — no device needed
+flutter test                    # patient 125, profiler 21, tera_capture 4 — no device needed
 flutter analyze
 ```
 
