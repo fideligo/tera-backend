@@ -152,6 +152,8 @@ class AuditAction(str, Enum):
     SESSION_DUPLICATE_REPLAYED = "session_duplicate_replayed"
     CUFF_READING_RECORDED = "cuff_reading_recorded"
     PATIENT_CONTEXT_RECORDED = "patient_context_recorded"
+    PHR_PROFILE_UPDATED = "phr_profile_updated"
+    SESSION_CONTEXT_RECORDED = "session_context_recorded"
     CALIBRATION_ESTABLISHED = "calibration_established"
     CALIBRATION_SUPERSEDED = "calibration_superseded"
     EVENT_RECORDED = "event_recorded"
@@ -177,3 +179,32 @@ class PregnancyAnswer(str, Enum):
     YES = "yes"
     NO = "no"
     PREFER_NOT_TO_SAY = "prefer_not_to_say"
+
+
+class SexAtBirth(str, Enum):
+    """PM spec ONB-01. Three options, matching the form."""
+
+    FEMALE = "female"
+    MALE = "male"
+    PREFER_NOT_TO_SAY = "prefer_not_to_say"
+
+
+class HypertensionStatus(str, Enum):
+    """PM spec ONB-03. Reported by the patient, never inferred."""
+
+    DIAGNOSED = "diagnosed"
+    NOT_DIAGNOSED = "not_diagnosed"
+    NOT_SURE = "not_sure"
+
+
+class MedicationStatusToday(str, Enum):
+    """PM spec CTX-01.
+
+    Four-valued: "not applicable" and "not sure" are different from each other and from no, and
+    collapsing them would record a statement the patient did not make.
+    """
+
+    AS_USUAL = "as_usual"
+    MISSED_OR_LATE = "missed_or_late"
+    NOT_APPLICABLE = "not_applicable"
+    NOT_SURE = "not_sure"

@@ -203,6 +203,8 @@ def all_user_facing_strings() -> dict[str, str]:
         "ACTION_CUFF_REQUESTED_SESSION_UNUSABLE": ACTION_CUFF_REQUESTED_SESSION_UNUSABLE,
         "ACTION_SEEK_EMERGENCY_CARE": ACTION_SEEK_EMERGENCY_CARE,
         "CONTRAINDICATED_PREGNANCY": CONTRAINDICATED_PREGNANCY,
+        "CONTEXT_DISCLAIMER": CONTEXT_DISCLAIMER,
+        "INSIGHT_NOTICE": INSIGHT_NOTICE,
         "CONFIDENCE_NOTICE": CONFIDENCE_NOTICE,
         "MAGNITUDE_NOTICE": MAGNITUDE_NOTICE,
         "SYNTHETIC_NOTICE": SYNTHETIC_NOTICE,
@@ -214,3 +216,58 @@ def all_user_facing_strings() -> dict[str, str]:
         {f"REJECTION_WORDING[{key.value}]": value for key, value in REJECTION_WORDING.items()}
     )
     return strings
+
+
+# ------------------------------------------------------------------ insight wording (PM §23)
+
+#: Hero result copy, one per `ResultState`. Section 23.1.
+RESULT_STATE_WORDING: dict[str, str] = {
+    "within_pattern": "Within your recent pattern",
+    "single_change": "A BP-related change was detected",
+    "persistent_change": "Persistent BP-related change detected",
+    "bp_within_threshold": "Within your current monitoring threshold",
+    "bp_above_threshold": "Above 140/90",
+    "no_result": "This check did not produce a result",
+}
+
+#: Section 23.4's "Your Next Best Step". One per action code.
+#:
+#: None of these is a dose instruction, and none is reassurance. "Continue monitoring" is an
+#: instruction about the schedule, not a statement that anything is fine.
+PRIORITY_ACTION_WORDING: dict[str, str] = {
+    "continue_monitoring": "Continue your regular monitoring",
+    "repeat_later": "Repeat the check later under similar resting conditions",
+    "rest_and_repeat": "Rest and repeat before interpreting the change",
+    "standardize_and_repeat": "Repeat under standardized resting conditions",
+    "confirm_with_cuff": "Confirm with a fresh upper-arm cuff reading",
+    "follow_up_pathway": "Arrange a follow-up with your doctor",
+    "set_bp_reference": "Add a cuff reading to set your BP reference",
+}
+
+#: Section 23.3's context chips. Shown beside a result, never as its cause.
+CONTEXT_CODE_WORDING: dict[str, str] = {
+    "medication_missed": "Medication missed or late",
+    "less_sleep": "Less sleep",
+    "higher_stress": "Higher stress",
+    "hr_above_resting": "Heart rate above your usual resting pattern",
+    "non_standard_precondition": "Not measured under standard resting conditions",
+    "reference_above_threshold": "Your BP reference is above 140/90",
+}
+
+#: Section 23.3's disclaimer, verbatim in intent. The engine reports associations; it does not
+#: claim any of them produced the result.
+CONTEXT_DISCLAIMER = (
+    "These factors are shown as context. Tera does not assume they caused the result."
+)
+
+#: Shown wherever an insight appears.
+#:
+#: It says what the insight *is* rather than what it is not. The obvious phrasing — "this is not a
+#: diagnosis" — trips the invariant 6 deny-list, which matches ``diagnos\w*`` and cannot tell a
+#: claim from its negation. That bluntness is deliberate and worth keeping: the cost is a reworded
+#: sentence, and the alternative is a deny-list with exceptions in it. Recorded in decisions.md.
+INSIGHT_NOTICE = (
+    "Tera reports change against your own cuff reference. It does not identify or rule out any "
+    "condition. Only readings taken with a validated upper-arm cuff are blood-pressure "
+    "measurements."
+)

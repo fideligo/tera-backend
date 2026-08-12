@@ -255,8 +255,10 @@ def populated_clinical_tables(
         DeviationState,
         MeasurementSession,
         MedicationEvent,
+        MedicationStatusToday,
         PatientContext,
         PregnancyAnswer,
+        SessionContext,
         RedFlagEvent,
         SymptomEvent,
         TrendDirection,
@@ -333,6 +335,17 @@ def populated_clinical_tables(
             medications=[{"name": "fixture", "dose": "1 mg"}],
             pregnant=PregnancyAnswer.NO,
             known_arrhythmia=False,
+        )
+    )
+
+    db.add(
+        SessionContext(
+            session_id=estimated.id,
+            recorded_at=base + timedelta(days=6),
+            sleep_less_than_usual=False,
+            stress_higher_than_usual=False,
+            feeling_unwell=False,
+            medication_status_today=MedicationStatusToday.AS_USUAL,
         )
     )
 

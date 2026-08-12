@@ -12,6 +12,8 @@ from app.models.clinical import (
     CuffReading,
     MedicationEvent,
     PatientContext,
+    PhrProfile,
+    SessionContext,
     RedFlagEvent,
     SymptomEvent,
 )
@@ -24,8 +26,11 @@ from app.models.enums import (
     CuffSource,
     DeviationState,
     EventType,
+    HypertensionStatus,
+    MedicationStatusToday,
     Posture,
     PregnancyAnswer,
+    SexAtBirth,
     QualifiedStatus,
     RejectionReason,
     SessionStatus,
@@ -59,6 +64,7 @@ CLINICAL_TABLES: tuple[str, ...] = (
     "audit_log",
     "calibration_source_session",
     "patient_context",
+    "session_context",
 )
 
 __all__ = [
@@ -98,5 +104,10 @@ __all__ = [
     "UserRole",
     "CLINICAL_TABLES",
     "PatientContext",
+    "PhrProfile",
     "PregnancyAnswer",
+    "SessionContext",
+    "SexAtBirth",
+    "HypertensionStatus",
+    "MedicationStatusToday",
 ]

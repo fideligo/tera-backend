@@ -1182,3 +1182,62 @@ contents, and the deny-list does not help if the string is interpolated into a `
 checked-in pickle rots against the scikit-learn version that wrote it. `ml/MODEL_HANDOFF.md` and
 `ml/export_model.py` are tracked; the `.joblib`, `.json` and `.ipynb` are not. Point
 `TERA_RHYTHM_PATH` at a local copy, or drop one in `backend/ml_models/`.
+
+## PHR profile, session context, and the rule engine (PM spec 24, 28, 30)
+
+**Two tables, two disciplines, and the difference is the point.**
+
+`phr_profile` is **mutable** and deliberately *not* a clinical record in invariant 5's sense. It
+describes a person as they are now — a weight, a hypertension status — so a corrected height is a
+correction, not a new fact about a different moment. One row per patient, no append-only trigger.
+
+`session_context` **is** append-only, with the shared trigger. It records what the patient reported
+around one measurement. Editing it later would rewrite what was true then. The spec's
+`PATCH .../context` is therefore an insert-and-supersede, and reads take the latest row.
+
+The pregnancy and rhythm answers stay in `patient_context` rather than moving into the profile:
+those are moment-in-time facts the contraindication gate reads, and they must never be rewritten.
+
+### POST, not PATCH
+
+The spec writes both as `PATCH`, and section 30 opens with "Route names are examples."
+`test_clinical_rows_have_no_update_or_delete_route` walks the OpenAPI schema and refuses **any**
+PUT, PATCH or DELETE anywhere in the API — deliberately blunt, because the verb is what a client
+sees and a mutable-looking route on a clinical resource is an invitation. The verb is not
+load-bearing in the spec; the invariant is load-bearing here. For the context route POST is also
+the more honest verb: it inserts.
+
+**An absent field means unchanged, not cleared.** Otherwise a screen collecting half the profile
+erases the other half every time it saves.
+
+**Condition and symptom codes are closed lists**, so a typo is a 422 rather than a row nobody can
+query later. `chest_pain` is refused by the symptom list on purpose: red flags terminate a session
+before capture, offline, and one arriving at CTX-01 would be arriving too late to act on.
+
+### The rule engine
+
+Section 24 as deterministic code, in `services/insight.py`. Pure — same features in, same verdict
+out, asserted — and it does no IO: the caller assembles the features.
+
+**Decision and wording are separate**, which is why the engine returns codes and `language.py`
+holds the sentences. The spec separates `deterministicRuleEngine` from `languageLayer` for the same
+reason: the two get reviewed by different people.
+
+**Comparability is checked before the trend is interpreted**, in both the single-change and
+persistent rows. A change measured on someone who was not at rest is not evidence of a change in
+them, and the matrix says so twice.
+
+**Context never changes the verdict.** A missed dose, poor sleep and higher stress produce context
+codes and leave the action alone — section 24 says "no dose change advice" in its own row, and a
+test asserts no action wording is a dose instruction.
+
+**The insight is computed on read and stored nowhere.** It is a function of rows that already
+exist, so it cannot drift from them and there is no second copy to keep in step. The
+contraindication gate covers it too: an estimate withheld on the session detail must not reappear
+wrapped in an insight.
+
+### The deny-list cannot tell a claim from its negation
+
+"This is not a diagnosis" trips `\bdiagnos\w*`. The wording became "It does not identify or rule
+out any condition" instead. Keeping the deny-list blunt is the right trade — the cost is a reworded
+sentence, and the alternative is a deny-list with exceptions in it, which is how exceptions start.

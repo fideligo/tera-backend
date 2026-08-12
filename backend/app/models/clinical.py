@@ -7,16 +7,22 @@ never an UPDATE — see ``CuffReading.corrects_id``.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, RecordedAtMixin, SyntheticMixin, UuidPkMixin, utcnow
 from app.models.core import enum_column
-from app.models.enums import CuffSource, PregnancyAnswer
+from app.models.enums import (
+    CuffSource,
+    HypertensionStatus,
+    MedicationStatusToday,
+    PregnancyAnswer,
+    SexAtBirth,
+)
 
 # Plausibility ranges are given verbatim in BUILD_SPEC 4.1 and must exist at database level.
 # They mirror PlausibilitySettings; the config values are what the API rejects on, these are the
@@ -211,4 +217,92 @@ class PatientContext(UuidPkMixin, SyntheticMixin, Base):
             name="ck_patient_context_clinic_bp_ordered",
         ),
         sa.Index("ix_patient_context_patient_recorded", "patient_id", "recorded_at"),
+    )
+
+
+class PhrProfile(UuidPkMixin, SyntheticMixin, Base):
+    """The minimum viable PHR (PM spec section 28's ``phr_profiles``).
+
+    **Deliberately mutable, and deliberately not a clinical record in invariant 5's sense.** It
+    describes a person as they are now — a weight, a hypertension status — so a correction is a
+    correction, not a new fact about a different moment. One row per patient, no append-only
+    trigger, and `updated_at` carries the recency.
+
+    The pregnancy and rhythm answers live in ``patient_context`` rather than here, because those
+    *are* moment-in-time facts that the contraindication gate reads and must never be rewritten.
+    """
+
+    __tablename__ = "phr_profile"
+
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        sa.ForeignKey("patient.id", ondelete="RESTRICT"), nullable=False, unique=True
+    )
+
+    date_of_birth: Mapped[date | None] = mapped_column(sa.Date, nullable=True)
+    sex_assigned_at_birth: Mapped[SexAtBirth | None] = mapped_column(
+        enum_column(SexAtBirth, "sex_at_birth"), nullable=True
+    )
+    height_cm: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    weight_kg: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+
+    hypertension_status: Mapped[HypertensionStatus | None] = mapped_column(
+        enum_column(HypertensionStatus, "hypertension_status"), nullable=True
+    )
+    taking_bp_medication: Mapped[bool | None] = mapped_column(sa.Boolean, nullable=True)
+
+    #: Section 28's `health_conditions`, folded in. Codes are the spec's list.
+    conditions: Mapped[list[str]] = mapped_column(
+        ARRAY(sa.String(64)), nullable=False, server_default=sa.text("'{}'::varchar[]"), default=list
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "height_cm IS NULL OR (height_cm >= 50 AND height_cm <= 250)",
+            name="ck_phr_profile_height_plausible",
+        ),
+        sa.CheckConstraint(
+            "weight_kg IS NULL OR (weight_kg >= 10 AND weight_kg <= 400)",
+            name="ck_phr_profile_weight_plausible",
+        ),
+        sa.UniqueConstraint("patient_id", name="uq_phr_profile_patient"),
+    )
+
+
+class SessionContext(UuidPkMixin, SyntheticMixin, Base):
+    """CTX-01 for one check (PM spec section 28's ``session_context``).
+
+    **Append-only** (invariant 5), unlike :class:`PhrProfile`. It records what the patient reported
+    around one measurement at one moment; editing it later would rewrite what was true then. The
+    spec's ``PATCH .../context`` is implemented as insert-and-supersede, and reads take the latest
+    row.
+
+    Filed here rather than as a ``symptom`` event, so the backend can tell a reported symptom from
+    a context record without inspecting a payload.
+    """
+
+    __tablename__ = "session_context"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        sa.ForeignKey("measurement_session.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    sleep_less_than_usual: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+    stress_higher_than_usual: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+    feeling_unwell: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+    symptoms: Mapped[list[str]] = mapped_column(
+        ARRAY(sa.String(64)), nullable=False, server_default=sa.text("'{}'::varchar[]"), default=list
+    )
+    medication_status_today: Mapped[MedicationStatusToday] = mapped_column(
+        enum_column(MedicationStatusToday, "medication_status_today"), nullable=False
+    )
+
+    __table_args__ = (
+        sa.Index("ix_session_context_session_recorded", "session_id", "recorded_at"),
     )

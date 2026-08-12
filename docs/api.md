@@ -189,6 +189,59 @@ Request body: `CalibrationCreate`
 | `200` | Successful Response |
 | `422` | Validation Error |
 
+### `GET /v1/check-sessions/{session_id}/context`
+
+**The context in force for a check**
+
+| Parameter | In | Required |
+|---|---|---|
+| `session_id` | path | yes |
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+| `422` | Validation Error |
+
+### `POST /v1/check-sessions/{session_id}/context`
+
+**Record CTX-01 for a check**
+
+A patch by name, an insert by storage.
+
+`session_context` is append-only, so a correction adds a row and reads take the latest. What
+the patient reported around a past measurement is a fact about that moment, and rewriting it
+is what invariant 5 exists to prevent.
+
+| Parameter | In | Required |
+|---|---|---|
+| `session_id` | path | yes |
+
+Request body: `SessionContextPatch`
+
+| Response | Description |
+|---|---|
+| `201` | Successful Response |
+| `422` | Validation Error |
+
+### `GET /v1/check-sessions/{session_id}/insight`
+
+**The deterministic insight for a check**
+
+Computed on read, stored nowhere.
+
+An insight is a function of rows that already exist, so recomputing it cannot drift from them
+— and there is no second copy to keep in step. The rule engine is pure; every read of the same
+session returns the same verdict.
+
+| Parameter | In | Required |
+|---|---|---|
+| `session_id` | path | yes |
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+| `422` | Validation Error |
+
 ### `POST /v1/cuff-readings`
 
 **Submit a user-confirmed cuff reading**
@@ -328,6 +381,31 @@ Request body: `PatientContextCreate`
 | Response | Description |
 |---|---|
 | `201` | Successful Response |
+| `422` | Validation Error |
+
+### `GET /v1/profile`
+
+**The patient's health profile**
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+
+### `POST /v1/profile`
+
+**Update the health profile**
+
+Create or update, field by field.
+
+Only fields present in the request are touched. An absent field means "unchanged", not
+"clear" — otherwise a screen that collects half the profile would erase the other half every
+time it saved.
+
+Request body: `PhrProfilePatch`
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
 | `422` | Validation Error |
 
 ### `POST /v1/sessions`
@@ -634,6 +712,10 @@ Discriminator for POST /v1/events.
 |---|---|---|
 | `detail` | array of ValidationError | no |
 
+### `HypertensionStatus`
+
+PM spec ONB-03. Reported by the patient, never inferred.
+
 ### `LogoutRequest`
 
 Ending a session means revoking its refresh token; the access token expires on its own.
@@ -649,6 +731,13 @@ Ending a session means revoking its refresh token; the access token expires on i
 |---|---|---|
 | `name` | string | yes |
 | `dose` | string | no |
+
+### `MedicationStatusToday`
+
+PM spec CTX-01.
+
+Four-valued: "not applicable" and "not sure" are different from each other and from no, and
+collapsing them would record a statement the patient did not make.
 
 ### `NextAction`
 
@@ -706,6 +795,44 @@ The context in force. Append-only, so this is the most recent row, not the only 
 | `last_clinic_systolic_mmhg` | integer \| null | yes |
 | `last_clinic_diastolic_mmhg` | integer \| null | yes |
 | `last_clinic_taken_on` | string \| null | yes |
+
+### `PhrProfileOut`
+
+The profile as stored.
+
+**No BMI.** The spec forbids deriving one and invariant 6 forbids the class of thing: height
+and weight are returned as given and never combined.
+
+| Field | Type | Required |
+|---|---|---|
+| `synthetic` | boolean | yes |
+| `synthetic_notice` | string \| null | no |
+| `patient_id` | string | yes |
+| `date_of_birth` | string \| null | yes |
+| `sex_assigned_at_birth` | SexAtBirth \| null | yes |
+| `height_cm` | number \| null | yes |
+| `weight_kg` | number \| null | yes |
+| `hypertension_status` | HypertensionStatus \| null | yes |
+| `taking_bp_medication` | boolean \| null | yes |
+| `conditions` | array of string | yes |
+| `updated_at` | string | yes |
+
+### `PhrProfilePatch`
+
+`PATCH /v1/profile`. Every field optional — that is what makes it a patch.
+
+``patient_id`` is deliberately absent: it comes from the token, so a profile cannot be edited
+against somebody else's record by changing a request body.
+
+| Field | Type | Required |
+|---|---|---|
+| `date_of_birth` | string \| null | no |
+| `sex_assigned_at_birth` | SexAtBirth \| null | no |
+| `height_cm` | number \| null | no |
+| `weight_kg` | number \| null | no |
+| `hypertension_status` | HypertensionStatus \| null | no |
+| `taking_bp_medication` | boolean \| null | no |
+| `conditions` | array of string \| null | no |
 
 ### `Posture`
 
@@ -812,6 +939,39 @@ about the patient (invariant 6).
 | `rejection` | RejectionOut \| null | no |
 | `action` | NextAction | yes |
 
+### `SessionContextOut`
+
+The context in force for a session. The latest row, not the only one.
+
+| Field | Type | Required |
+|---|---|---|
+| `synthetic` | boolean | yes |
+| `synthetic_notice` | string \| null | no |
+| `id` | string | yes |
+| `session_id` | string | yes |
+| `recorded_at` | string | yes |
+| `sleep_less_than_usual` | boolean | yes |
+| `stress_higher_than_usual` | boolean | yes |
+| `feeling_unwell` | boolean | yes |
+| `symptoms` | array of string | yes |
+| `medication_status_today` | MedicationStatusToday | yes |
+
+### `SessionContextPatch`
+
+`PATCH /v1/check-sessions/{id}/context` — CTX-01 for one check.
+
+A patch by the spec's naming, an **insert** by its storage: `session_context` is append-only,
+so a correction supersedes rather than overwrites. What the patient reported around a past
+measurement is a fact about that moment.
+
+| Field | Type | Required |
+|---|---|---|
+| `sleep_less_than_usual` | boolean | no |
+| `stress_higher_than_usual` | boolean | no |
+| `feeling_unwell` | boolean | no |
+| `symptoms` | array of string | no |
+| `medication_status_today` | MedicationStatusToday | no |
+
 ### `SessionDetailOut`
 
 Patient-facing session detail (drives the Phase 2 session-detail screen).
@@ -878,6 +1038,10 @@ POST /v1/sessions body.
 | `quality` | SessionQuality | yes |
 | `calibration_id` | string \| null | no |
 | `synthetic` | boolean | no |
+
+### `SexAtBirth`
+
+PM spec ONB-01. Three options, matching the form.
 
 ### `SummaryCalibrationVersion`
 

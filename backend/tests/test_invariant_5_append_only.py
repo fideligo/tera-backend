@@ -57,6 +57,9 @@ _UPDATE_TARGET_COLUMN = {
     "calibration_source_session": ("session_ptt_ms", "999.0"),
     # Rewriting a pregnancy answer is exactly the mutation this table exists to prevent.
     "patient_context": ("known_arrhythmia", "true"),
+    # Rewriting what a patient reported around a past measurement is exactly the mutation this
+    # table exists to prevent. phr_profile is deliberately absent: it is mutable by design.
+    "session_context": ("feeling_unwell", "true"),
 }
 
 

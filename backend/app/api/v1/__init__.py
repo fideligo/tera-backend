@@ -16,6 +16,7 @@ from app.api.v1 import (
     episodes,
     events,
     patient_context,
+    phr,
     sessions,
 )
 
@@ -25,6 +26,7 @@ api_router.include_router(device_profiles.router)
 api_router.include_router(sessions.router)
 api_router.include_router(cuff_readings.router)
 api_router.include_router(patient_context.router)
+api_router.include_router(phr.router)
 api_router.include_router(calibrations.router)
 api_router.include_router(events.router)
 api_router.include_router(episodes.router)
