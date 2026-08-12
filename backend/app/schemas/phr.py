@@ -9,6 +9,8 @@ from typing import Any
 from pydantic import Field, model_validator
 
 from app.models.enums import (
+    CheckMode,
+    CheckSessionStatus,
     HypertensionStatus,
     MedicationStatusToday,
     SexAtBirth,
@@ -140,3 +142,45 @@ class SessionContextOut(SyntheticFlag, TeraModel):
             "symptoms": list(self.symptoms),
             "medication_status_today": self.medication_status_today.value,
         }
+
+
+class CheckSessionCreate(TeraModel):
+    """`POST /v1/check-sessions`. Opened at the start of the flow, in both modes."""
+
+    episode_id: uuid.UUID
+    mode: CheckMode
+
+
+class CheckSessionOut(SyntheticFlag, TeraModel):
+    id: uuid.UUID
+    episode_id: uuid.UUID
+    mode: CheckMode
+    status: CheckSessionStatus
+    started_at: datetime
+    completed_at: datetime | None
+
+
+class PreconditionCreate(TeraModel):
+    """PRE-01's five answers.
+
+    ``is_ready`` is **not** accepted: it is derived on the server from the five, so a client cannot
+    declare itself ready while reporting that it is not.
+    """
+
+    rested_5_min: bool
+    recent_activity_30_min: bool
+    recent_caffeine_30_min: bool
+    recent_nicotine_30_min: bool
+    needs_restroom: bool
+
+
+class PreconditionOut(SyntheticFlag, TeraModel):
+    id: uuid.UUID
+    check_session_id: uuid.UUID
+    recorded_at: datetime
+    rested_5_min: bool
+    recent_activity_30_min: bool
+    recent_caffeine_30_min: bool
+    recent_nicotine_30_min: bool
+    needs_restroom: bool
+    is_ready: bool

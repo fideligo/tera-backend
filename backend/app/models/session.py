@@ -49,6 +49,11 @@ class MeasurementSession(SyntheticMixin, Base):
     episode_id: Mapped[uuid.UUID] = mapped_column(
         sa.ForeignKey("monitoring_episode.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    #: The check flow this capture belongs to. Nullable: every session submitted before
+    #: migration 0010 has none, and inventing a link would be fabricating one.
+    check_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("check_session.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     device_profile_id: Mapped[uuid.UUID] = mapped_column(
         sa.ForeignKey("device_profile.id", ondelete="RESTRICT"), nullable=False, index=True
     )

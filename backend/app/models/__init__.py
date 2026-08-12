@@ -10,9 +10,11 @@ from app.models.base import Base, SyntheticMixin, utcnow
 from app.models.clinical import (
     ClinicianSummary,
     CuffReading,
+    CheckSession,
     MedicationEvent,
     PatientContext,
     PhrProfile,
+    Precondition,
     SessionContext,
     RedFlagEvent,
     SymptomEvent,
@@ -26,6 +28,8 @@ from app.models.enums import (
     CuffSource,
     DeviationState,
     EventType,
+    CheckMode,
+    CheckSessionStatus,
     HypertensionStatus,
     MedicationStatusToday,
     Posture,
@@ -65,6 +69,7 @@ CLINICAL_TABLES: tuple[str, ...] = (
     "calibration_source_session",
     "patient_context",
     "session_context",
+    "precondition",
 )
 
 __all__ = [
@@ -104,7 +109,11 @@ __all__ = [
     "UserRole",
     "CLINICAL_TABLES",
     "PatientContext",
+    "CheckSession",
+    "CheckMode",
+    "CheckSessionStatus",
     "PhrProfile",
+    "Precondition",
     "PregnancyAnswer",
     "SessionContext",
     "SexAtBirth",

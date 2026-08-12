@@ -17,6 +17,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, RecordedAtMixin, SyntheticMixin, UuidPkMixin, utcnow
 from app.models.core import enum_column
 from app.models.enums import (
+    CheckMode,
+    CheckSessionStatus,
     CuffSource,
     HypertensionStatus,
     MedicationStatusToday,
@@ -286,8 +288,8 @@ class SessionContext(UuidPkMixin, SyntheticMixin, Base):
 
     __tablename__ = "session_context"
 
-    session_id: Mapped[uuid.UUID] = mapped_column(
-        sa.ForeignKey("measurement_session.id", ondelete="RESTRICT"), nullable=False, index=True
+    check_session_id: Mapped[uuid.UUID] = mapped_column(
+        sa.ForeignKey("check_session.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     recorded_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, default=utcnow
@@ -304,5 +306,72 @@ class SessionContext(UuidPkMixin, SyntheticMixin, Base):
     )
 
     __table_args__ = (
-        sa.Index("ix_session_context_session_recorded", "session_id", "recorded_at"),
+        sa.Index("ix_session_context_session_recorded", "check_session_id", "recorded_at"),
+    )
+
+
+class CheckSession(UuidPkMixin, SyntheticMixin, Base):
+    """One run through the check flow (PM spec section 28's ``check_sessions``).
+
+    **Created at the start of the flow, in both modes**, which is the whole point of it.
+    ``measurement_session`` is a sensor capture — it needs per-beat intervals, a device profile and
+    a quality block — so it cannot exist before capture and never exists at all for a BP-only
+    check. PRE-01 and CTX-01 therefore had nothing to attach to.
+
+    Not append-only: ``status`` walks the section 31 state machine, and ``completed_at`` is set at
+    the end. The clinical rows it points at are the append-only ones.
+    """
+
+    __tablename__ = "check_session"
+
+    episode_id: Mapped[uuid.UUID] = mapped_column(
+        sa.ForeignKey("monitoring_episode.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    mode: Mapped[CheckMode] = mapped_column(enum_column(CheckMode, "check_mode"), nullable=False)
+    status: Mapped[CheckSessionStatus] = mapped_column(
+        enum_column(CheckSessionStatus, "check_session_status"), nullable=False
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "completed_at IS NULL OR completed_at >= started_at",
+            name="ck_check_session_end_after_start",
+        ),
+    )
+
+
+class Precondition(UuidPkMixin, SyntheticMixin, Base):
+    """PRE-01 for one check (PM spec section 28's ``preconditions``).
+
+    Append-only: it describes the patient's state before one measurement, and rewriting it later
+    would rewrite what was true then.
+
+    ``is_ready`` is derived on write from the five answers, so the summary can never disagree with
+    what it summarises.
+    """
+
+    __tablename__ = "precondition"
+
+    check_session_id: Mapped[uuid.UUID] = mapped_column(
+        sa.ForeignKey("check_session.id", ondelete="RESTRICT"), nullable=False
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    rested_5_min: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+    recent_activity_30_min: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+    recent_caffeine_30_min: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+    recent_nicotine_30_min: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+    needs_restroom: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+    is_ready: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+
+    __table_args__ = (
+        sa.Index("ix_precondition_session_recorded", "check_session_id", "recorded_at"),
     )

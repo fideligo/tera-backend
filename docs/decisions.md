@@ -1241,3 +1241,45 @@ wrapped in an insight.
 "This is not a diagnosis" trips `\bdiagnos\w*`. The wording became "It does not identify or rule
 out any condition" instead. Keeping the deny-list blunt is the right trade — the cost is a reworded
 sentence, and the alternative is a deny-list with exceptions in it, which is how exceptions start.
+
+## `check_session`: a session that exists before a measurement does
+
+`measurement_session` is a *sensor capture*. It requires per-beat intervals, a device profile and a
+quality block, so it cannot exist before capture and never exists at all for a BP-only check. PRE-01
+therefore had nowhere to go, and CTX-01 fell back to an episode-scoped event.
+
+`check_session` (migration 0010) is the spec's own model from section 28: opened at the start of the
+flow in **both** modes, carrying a mode and a status that walk the section 31 machine. A sensor
+capture links back to it through a nullable `measurement_session.check_session_id` — nullable
+because every session submitted before 0010 has none, and inventing a link would be fabricating one.
+
+`session_context` was re-pointed from `measurement_session` to `check_session`. It was created in
+0009 the same day and holds no rows; the migration **checks that and refuses** rather than dropping
+clinical rows if it is wrong.
+
+**The contraindication gate moved to the door.** `POST /v1/check-sessions` refuses with 403, so a
+patient who cannot get a trend is not walked through five screens to be refused at the end.
+
+### PRE-01 is persisted, and `is_ready` is derived
+
+`precondition` is append-only: it describes the patient's state before one measurement, and
+rewriting it later would rewrite what was true then.
+
+`is_ready` is computed on the server from the five answers and **not accepted from the client** — a
+request carrying it is a 422. Otherwise a client could declare itself ready while reporting a
+confounder, and the summary would disagree with what it summarises.
+
+The rule engine now reads it instead of hardcoding `precondition_standard = True`, so section 24's
+"non-standard precondition" rows finally fire. **Absent is treated as standard**: those rows are
+about a *reported* confounder, and inventing one would refuse a check nobody said anything wrong
+about.
+
+### A pre-existing flaky invariant test
+
+`test_no_audit_entry_carries_clinical_content` scanned `actor|target|action` for the strings "191",
+"117" and "143". `target` is a hex UUID and all three are valid hex, so it failed on a coincidence
+roughly one run in fifty — which is how it surfaced here, unrelated to this change.
+
+`target` is now checked *structurally* — it parses as a UUID, so it cannot carry a clinical value —
+and excluded from the substring scan. A flaky invariant test is worse than no invariant test:
+people learn to re-run it.

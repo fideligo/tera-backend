@@ -154,6 +154,8 @@ class AuditAction(str, Enum):
     PATIENT_CONTEXT_RECORDED = "patient_context_recorded"
     PHR_PROFILE_UPDATED = "phr_profile_updated"
     SESSION_CONTEXT_RECORDED = "session_context_recorded"
+    CHECK_SESSION_CREATED = "check_session_created"
+    PRECONDITIONS_RECORDED = "preconditions_recorded"
     CALIBRATION_ESTABLISHED = "calibration_established"
     CALIBRATION_SUPERSEDED = "calibration_superseded"
     EVENT_RECORDED = "event_recorded"
@@ -208,3 +210,24 @@ class MedicationStatusToday(str, Enum):
     MISSED_OR_LATE = "missed_or_late"
     NOT_APPLICABLE = "not_applicable"
     NOT_SURE = "not_sure"
+
+
+class CheckMode(str, Enum):
+    """PM spec section 28. The two product loops."""
+
+    SENSOR = "sensor"
+    BP_ONLY = "bp_only"
+
+
+class CheckSessionStatus(str, Enum):
+    """PM spec section 28 and the section 31 state machine."""
+
+    CREATED = "created"
+    REFERENCE_PENDING = "reference_pending"
+    PRECHECK_PENDING = "precheck_pending"
+    CONTEXT_PENDING = "context_pending"
+    CAPTURE_PENDING = "capture_pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    ABANDONED = "abandoned"
+    FAILED_QUALITY = "failed_quality"

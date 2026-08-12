@@ -189,6 +189,35 @@ Request body: `CalibrationCreate`
 | `200` | Successful Response |
 | `422` | Validation Error |
 
+### `POST /v1/check-sessions`
+
+**Open a check session**
+
+Opened at the start of the flow, in **both** modes.
+
+This is what gives PRE-01 and CTX-01 something to attach to before — and, for a BP-only check,
+instead of — a sensor capture.
+
+Request body: `CheckSessionCreate`
+
+| Response | Description |
+|---|---|
+| `201` | Successful Response |
+| `422` | Validation Error |
+
+### `GET /v1/check-sessions/{session_id}`
+
+**A check session**
+
+| Parameter | In | Required |
+|---|---|---|
+| `session_id` | path | yes |
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+| `422` | Validation Error |
+
 ### `GET /v1/check-sessions/{session_id}/context`
 
 **The context in force for a check**
@@ -240,6 +269,27 @@ session returns the same verdict.
 | Response | Description |
 |---|---|
 | `200` | Successful Response |
+| `422` | Validation Error |
+
+### `POST /v1/check-sessions/{session_id}/preconditions`
+
+**Record PRE-01 for a check**
+
+PRE-01's five answers.
+
+Append-only, like the context: it describes the patient's state before one measurement.
+``is_ready`` is derived here rather than accepted, so a client cannot claim readiness while
+reporting that it is not.
+
+| Parameter | In | Required |
+|---|---|---|
+| `session_id` | path | yes |
+
+Request body: `PreconditionCreate`
+
+| Response | Description |
+|---|---|
+| `201` | Successful Response |
 | `422` | Validation Error |
 
 ### `POST /v1/cuff-readings`
@@ -513,6 +563,36 @@ Invariant 4 — at most one active calibration per patient per device.
 ### `CameraHardwareLevel`
 
 Android INFO_SUPPORTED_HARDWARE_LEVEL.
+
+### `CheckMode`
+
+PM spec section 28. The two product loops.
+
+### `CheckSessionCreate`
+
+`POST /v1/check-sessions`. Opened at the start of the flow, in both modes.
+
+| Field | Type | Required |
+|---|---|---|
+| `episode_id` | string | yes |
+| `mode` | CheckMode | yes |
+
+### `CheckSessionOut`
+
+| Field | Type | Required |
+|---|---|---|
+| `synthetic` | boolean | yes |
+| `synthetic_notice` | string \| null | no |
+| `id` | string | yes |
+| `episode_id` | string | yes |
+| `mode` | CheckMode | yes |
+| `status` | CheckSessionStatus | yes |
+| `started_at` | string | yes |
+| `completed_at` | string \| null | yes |
+
+### `CheckSessionStatus`
+
+PM spec section 28 and the section 31 state machine.
 
 ### `ClinicianSummaryOut`
 
@@ -837,6 +917,37 @@ against somebody else's record by changing a request body.
 ### `Posture`
 
 Posture during capture. Recorded because posture shifts PTT independently of pressure.
+
+### `PreconditionCreate`
+
+PRE-01's five answers.
+
+``is_ready`` is **not** accepted: it is derived on the server from the five, so a client cannot
+declare itself ready while reporting that it is not.
+
+| Field | Type | Required |
+|---|---|---|
+| `rested_5_min` | boolean | yes |
+| `recent_activity_30_min` | boolean | yes |
+| `recent_caffeine_30_min` | boolean | yes |
+| `recent_nicotine_30_min` | boolean | yes |
+| `needs_restroom` | boolean | yes |
+
+### `PreconditionOut`
+
+| Field | Type | Required |
+|---|---|---|
+| `synthetic` | boolean | yes |
+| `synthetic_notice` | string \| null | no |
+| `id` | string | yes |
+| `check_session_id` | string | yes |
+| `recorded_at` | string | yes |
+| `rested_5_min` | boolean | yes |
+| `recent_activity_30_min` | boolean | yes |
+| `recent_caffeine_30_min` | boolean | yes |
+| `recent_nicotine_30_min` | boolean | yes |
+| `needs_restroom` | boolean | yes |
+| `is_ready` | boolean | yes |
 
 ### `PregnancyAnswer`
 

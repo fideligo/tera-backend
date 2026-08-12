@@ -10,6 +10,8 @@ something happened and to which row, never what the value was.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
@@ -243,7 +245,14 @@ def test_no_audit_entry_carries_clinical_content(
     assert rows, "nothing was audited, so this test proved nothing"
 
     for row in rows:
-        blob = f"{row.actor}|{row.target}|{row.action.value}"
+        # `target` is excluded from the substring scan on purpose, and checked structurally
+        # instead. It is a row id, so it *cannot* carry a clinical value — but it is a hex UUID,
+        # and "191", "117" and "143" are all valid hex, so scanning it produced a test that failed
+        # roughly one run in fifty on a coincidence. A flaky invariant test is worse than none.
+        if row.target is not None:
+            uuid.UUID(str(row.target))
+
+        blob = f"{row.actor}|{row.action.value}"
         for marker in ("191", "117", "143"):
             assert marker not in blob, f"audit entry leaked a clinical value: {blob}"
 

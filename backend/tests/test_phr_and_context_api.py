@@ -6,7 +6,6 @@ import pytest
 import sqlalchemy as sa
 
 from app.models import PhrProfile, SessionContext
-from tests.conftest import make_session_payload, post_session
 
 PROFILE = "/v1/profile"
 
@@ -103,11 +102,14 @@ class TestProfile:
 
 class TestSessionContext:
     @pytest.fixture
-    def session_id(self, client, auth, episode, device_profile):
-        payload = make_session_payload(episode=episode, device_profile=device_profile)
-        response = post_session(client, auth, payload)
+    def session_id(self, client, auth, episode):
+        response = client.post(
+            "/v1/check-sessions",
+            json={"episode_id": str(episode.id), "mode": "sensor"},
+            headers=auth,
+        )
         assert response.status_code == 201
-        return response.json()["session_id"]
+        return response.json()["id"]
 
     def test_context_is_recorded_against_the_session(self, client, auth, session_id):
         response = client.post(
@@ -193,9 +195,12 @@ class TestSessionContext:
 
 class TestInsight:
     @pytest.fixture
-    def session_id(self, client, auth, episode, device_profile):
-        payload = make_session_payload(episode=episode, device_profile=device_profile)
-        return post_session(client, auth, payload).json()["session_id"]
+    def session_id(self, client, auth, episode):
+        return client.post(
+            "/v1/check-sessions",
+            json={"episode_id": str(episode.id), "mode": "sensor"},
+            headers=auth,
+        ).json()["id"]
 
     def test_an_insight_is_returned_with_wording_for_every_code(self, client, auth, session_id):
         response = client.get(_insight_url(session_id), headers=auth)
@@ -258,3 +263,153 @@ class TestInsight:
             ).status_code
             == 404
         )
+
+
+class TestCheckSessionsAndPreconditions:
+    """A session that exists before a measurement does, in both modes."""
+
+    def _open(self, client, auth, episode, mode: str) -> str:
+        response = client.post(
+            "/v1/check-sessions",
+            json={"episode_id": str(episode.id), "mode": mode},
+            headers=auth,
+        )
+        assert response.status_code == 201, response.text
+        return response.json()["id"]
+
+    def test_a_bp_only_check_gets_a_session_with_no_capture(self, client, auth, episode):
+        session_id = self._open(client, auth, episode, "bp_only")
+
+        body = client.get(f"/v1/check-sessions/{session_id}", headers=auth).json()
+        assert body["mode"] == "bp_only"
+        assert body["status"] == "created"
+
+    def test_bp_only_context_attaches_to_the_session_not_an_event(self, client, auth, episode):
+        session_id = self._open(client, auth, episode, "bp_only")
+
+        response = client.post(
+            f"/v1/check-sessions/{session_id}/context",
+            json={"feeling_unwell": True},
+            headers=auth,
+        )
+
+        assert response.status_code == 201
+        assert response.json()["session_id"] == session_id
+
+    def test_a_bp_only_insight_is_produced(self, client, auth, episode, db):
+        from datetime import datetime, timedelta, timezone
+
+        from app.models import CheckSession, CuffReading, CuffSource
+
+        session_id = self._open(client, auth, episode, "bp_only")
+        check = db.get(CheckSession, __import__("uuid").UUID(session_id))
+        taken = check.started_at + timedelta(minutes=1)
+        db.add(
+            CuffReading(
+                episode_id=episode.id,
+                systolic_mmhg=152,
+                diastolic_mmhg=96,
+                source=CuffSource.MANUAL_ENTRY,
+                taken_at=taken,
+                user_confirmed_at=taken,
+            )
+        )
+        db.commit()
+
+        body = client.get(f"/v1/check-sessions/{session_id}/insight", headers=auth).json()
+
+        # Previously this path had no session at all and the screen showed "no result".
+        assert body["result_state"] == "bp_above_threshold"
+        assert body["hero"]
+        assert body["next_best_step"]
+        assert body["reference_systolic"] == 152
+
+    def test_preconditions_are_recorded_and_readiness_is_derived(self, client, auth, episode):
+        session_id = self._open(client, auth, episode, "sensor")
+
+        ready = client.post(
+            f"/v1/check-sessions/{session_id}/preconditions",
+            json={
+                "rested_5_min": True,
+                "recent_activity_30_min": False,
+                "recent_caffeine_30_min": False,
+                "recent_nicotine_30_min": False,
+                "needs_restroom": False,
+            },
+            headers=auth,
+        )
+
+        assert ready.status_code == 201
+        assert ready.json()["is_ready"] is True
+
+    def test_readiness_is_derived_not_accepted(self, client, auth, episode):
+        session_id = self._open(client, auth, episode, "sensor")
+
+        # A client cannot declare itself ready while reporting a confounder.
+        response = client.post(
+            f"/v1/check-sessions/{session_id}/preconditions",
+            json={
+                "rested_5_min": False,
+                "recent_activity_30_min": True,
+                "recent_caffeine_30_min": False,
+                "recent_nicotine_30_min": False,
+                "needs_restroom": False,
+                "is_ready": True,
+            },
+            headers=auth,
+        )
+
+        assert response.status_code == 422
+
+    def test_a_non_standard_precondition_changes_the_priority_action(
+        self, client, auth, episode
+    ):
+        standard = self._open(client, auth, episode, "bp_only")
+        client.post(
+            f"/v1/check-sessions/{standard}/preconditions",
+            json={
+                "rested_5_min": True,
+                "recent_activity_30_min": False,
+                "recent_caffeine_30_min": False,
+                "recent_nicotine_30_min": False,
+                "needs_restroom": False,
+            },
+            headers=auth,
+        )
+
+        confounded = self._open(client, auth, episode, "bp_only")
+        client.post(
+            f"/v1/check-sessions/{confounded}/preconditions",
+            json={
+                "rested_5_min": False,
+                "recent_activity_30_min": True,
+                "recent_caffeine_30_min": True,
+                "recent_nicotine_30_min": False,
+                "needs_restroom": False,
+            },
+            headers=auth,
+        )
+
+        a = client.get(f"/v1/check-sessions/{standard}/insight", headers=auth).json()
+        b = client.get(f"/v1/check-sessions/{confounded}/insight", headers=auth).json()
+
+        # The engine now reads the real answers instead of assuming standard conditions.
+        assert "non_standard_precondition" not in a["context_codes"]
+        assert "non_standard_precondition" in b["context_codes"]
+
+    @pytest.mark.invariant
+    def test_opening_a_check_is_refused_when_pregnancy_is_recorded(self, client, auth, episode):
+        client.post(
+            "/v1/patient-context",
+            json={"pregnant": "yes", "known_arrhythmia": False},
+            headers=auth,
+        )
+
+        response = client.post(
+            "/v1/check-sessions",
+            json={"episode_id": str(episode.id), "mode": "sensor"},
+            headers=auth,
+        )
+
+        # At the door, rather than walking a patient through a check to refuse it at the end.
+        assert response.status_code == 403

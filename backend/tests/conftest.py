@@ -254,9 +254,13 @@ def populated_clinical_tables(
         ClinicianSummary,
         DeviationState,
         MeasurementSession,
+        CheckMode,
+        CheckSession,
+        CheckSessionStatus,
         MedicationEvent,
         MedicationStatusToday,
         PatientContext,
+        Precondition,
         PregnancyAnswer,
         SessionContext,
         RedFlagEvent,
@@ -338,9 +342,31 @@ def populated_clinical_tables(
         )
     )
 
+    check = CheckSession(
+        episode_id=episode.id,
+        mode=CheckMode.SENSOR,
+        status=CheckSessionStatus.COMPLETED,
+        started_at=base + timedelta(days=5),
+    )
+    db.add(check)
+    db.flush()
+
+    db.add(
+        Precondition(
+            check_session_id=check.id,
+            recorded_at=base + timedelta(days=5),
+            rested_5_min=True,
+            recent_activity_30_min=False,
+            recent_caffeine_30_min=False,
+            recent_nicotine_30_min=False,
+            needs_restroom=False,
+            is_ready=True,
+        )
+    )
+
     db.add(
         SessionContext(
-            session_id=estimated.id,
+            check_session_id=check.id,
             recorded_at=base + timedelta(days=6),
             sleep_less_than_usual=False,
             stress_higher_than_usual=False,

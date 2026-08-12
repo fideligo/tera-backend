@@ -31,15 +31,23 @@ from app.logging_config import get_logger
 from app.models import (
     AuditAction,
     Calibration,
+    CheckMode,
+    CheckSession,
+    CheckSessionStatus,
     CuffReading,
     MeasurementSession,
     PhrProfile,
+    Precondition,
     SessionContext,
     SessionStatus,
 )
 from app.schemas.phr import (
+    CheckSessionCreate,
+    CheckSessionOut,
     PhrProfileOut,
     PhrProfilePatch,
+    PreconditionCreate,
+    PreconditionOut,
     SessionContextOut,
     SessionContextPatch,
 )
@@ -123,20 +131,159 @@ def patch_profile(
 
 
 def _load_session(session_id: uuid.UUID, principal, db):
-    """The session and its episode. Authorisation runs through `load_episode`, the same path
-    every other clinical read uses, and the episode is returned rather than discarded because the
-    contraindication gate needs the patient id."""
-    stored = db.get(MeasurementSession, session_id)
+    """A check session and its episode.
+
+    Authorisation runs through `load_episode`, the same path every other clinical read uses, and
+    the episode is returned rather than discarded because the contraindication gate needs the
+    patient id.
+    """
+    stored = db.get(CheckSession, session_id)
     if stored is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="check session not found")
     episode = load_episode(stored.episode_id, principal, db)
     return stored, episode
+
+
+def _check_session_out(row: CheckSession) -> CheckSessionOut:
+    return CheckSessionOut(
+        id=row.id,
+        episode_id=row.episode_id,
+        mode=row.mode,
+        status=row.status,
+        started_at=row.started_at,
+        completed_at=row.completed_at,
+        synthetic=row.synthetic,
+    )
+
+
+@router.post(
+    "/check-sessions",
+    response_model=CheckSessionOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Open a check session",
+)
+def create_check_session(
+    body: CheckSessionCreate, db: DbDep, principal: PrincipalDep
+) -> CheckSessionOut:
+    """Opened at the start of the flow, in **both** modes.
+
+    This is what gives PRE-01 and CTX-01 something to attach to before — and, for a BP-only check,
+    instead of — a sensor capture.
+    """
+    episode = load_episode(body.episode_id, principal, db)
+
+    # The contraindication gate applies at the door: a patient who cannot get a trend should not be
+    # walked through a check to be refused at the end of it.
+    contraindication.assert_not_contraindicated(db, episode.patient_id)
+
+    row = CheckSession(
+        episode_id=episode.id,
+        mode=body.mode,
+        status=CheckSessionStatus.CREATED,
+        started_at=datetime.now(tz=timezone.utc),
+        synthetic=False,
+    )
+    db.add(row)
+    db.flush()
+
+    audit.record(db, principal=principal, action=AuditAction.CHECK_SESSION_CREATED, target=row.id)
+    db.commit()
+
+    log.info(
+        "check_session_created",
+        extra={"check_session_id": str(row.id), "mode": row.mode.value},
+    )
+    return _check_session_out(row)
+
+
+@router.get(
+    "/check-sessions/{session_id}",
+    response_model=CheckSessionOut,
+    summary="A check session",
+)
+def read_check_session(
+    session_id: uuid.UUID, db: DbDep, principal: PrincipalDep
+) -> CheckSessionOut:
+    stored, _episode = _load_session(session_id, principal, db)
+    return _check_session_out(stored)
+
+
+@router.post(
+    "/check-sessions/{session_id}/preconditions",
+    response_model=PreconditionOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Record PRE-01 for a check",
+)
+def record_preconditions(
+    session_id: uuid.UUID, body: PreconditionCreate, db: DbDep, principal: PrincipalDep
+) -> PreconditionOut:
+    """PRE-01's five answers.
+
+    Append-only, like the context: it describes the patient's state before one measurement.
+    ``is_ready`` is derived here rather than accepted, so a client cannot claim readiness while
+    reporting that it is not.
+    """
+    stored, _episode = _load_session(session_id, principal, db)
+
+    is_ready = (
+        body.rested_5_min
+        and not body.recent_activity_30_min
+        and not body.recent_caffeine_30_min
+        and not body.recent_nicotine_30_min
+        and not body.needs_restroom
+    )
+
+    row = Precondition(
+        check_session_id=stored.id,
+        recorded_at=datetime.now(tz=timezone.utc),
+        rested_5_min=body.rested_5_min,
+        recent_activity_30_min=body.recent_activity_30_min,
+        recent_caffeine_30_min=body.recent_caffeine_30_min,
+        recent_nicotine_30_min=body.recent_nicotine_30_min,
+        needs_restroom=body.needs_restroom,
+        is_ready=is_ready,
+        synthetic=False,
+    )
+    db.add(row)
+    db.flush()
+
+    audit.record(
+        db, principal=principal, action=AuditAction.PRECONDITIONS_RECORDED, target=row.id
+    )
+    db.commit()
+
+    log.info(
+        "preconditions_recorded",
+        extra={"check_session_id": str(stored.id), "is_ready": is_ready},
+    )
+
+    return PreconditionOut(
+        id=row.id,
+        check_session_id=row.check_session_id,
+        recorded_at=row.recorded_at,
+        rested_5_min=row.rested_5_min,
+        recent_activity_30_min=row.recent_activity_30_min,
+        recent_caffeine_30_min=row.recent_caffeine_30_min,
+        recent_nicotine_30_min=row.recent_nicotine_30_min,
+        needs_restroom=row.needs_restroom,
+        is_ready=row.is_ready,
+        synthetic=row.synthetic,
+    )
+
+
+def _latest_precondition(db, check_session_id: uuid.UUID) -> Precondition | None:
+    return db.execute(
+        select(Precondition)
+        .where(Precondition.check_session_id == check_session_id)
+        .order_by(desc(Precondition.recorded_at), desc(Precondition.id))
+        .limit(1)
+    ).scalar_one_or_none()
 
 
 def _context_out(row: SessionContext) -> SessionContextOut:
     return SessionContextOut(
         id=row.id,
-        session_id=row.session_id,
+        session_id=row.check_session_id,
         recorded_at=row.recorded_at,
         sleep_less_than_usual=row.sleep_less_than_usual,
         stress_higher_than_usual=row.stress_higher_than_usual,
@@ -150,7 +297,7 @@ def _context_out(row: SessionContext) -> SessionContextOut:
 def _latest_context(db, session_id: uuid.UUID) -> SessionContext | None:
     return db.execute(
         select(SessionContext)
-        .where(SessionContext.session_id == session_id)
+        .where(SessionContext.check_session_id == session_id)
         .order_by(desc(SessionContext.recorded_at), desc(SessionContext.id))
         .limit(1)
     ).scalar_one_or_none()
@@ -174,7 +321,7 @@ def patch_session_context(
     stored, _episode = _load_session(session_id, principal, db)
 
     row = SessionContext(
-        session_id=stored.id,
+        check_session_id=stored.id,
         recorded_at=datetime.now(tz=timezone.utc),
         sleep_less_than_usual=body.sleep_less_than_usual,
         stress_higher_than_usual=body.stress_higher_than_usual,
@@ -218,37 +365,51 @@ def read_session_context(
     return _context_out(row)
 
 
-def _build_features(db, stored: MeasurementSession, context: SessionContext | None) -> InsightFeatures:
+def _build_features(
+    db,
+    check: CheckSession,
+    context: SessionContext | None,
+    precondition: Precondition | None,
+) -> InsightFeatures:
     """Assemble what the matrix reads. All IO happens here; `evaluate` does none."""
-    estimate = stored.estimate
+    # The sensor capture belonging to this check, if there is one.
+    capture = db.execute(
+        select(MeasurementSession)
+        .where(MeasurementSession.check_session_id == check.id)
+        .order_by(desc(MeasurementSession.started_at))
+        .limit(1)
+    ).scalar_one_or_none()
+
+    estimate = capture.estimate if capture is not None else None
 
     # The reference is the cuff reading the active calibration was anchored to. Invariant 1: this
     # is the only place a pressure value can come from, and it is never derived from the trend.
     reference: CuffReading | None = None
-    if stored.calibration_id is not None:
-        calibration = db.get(Calibration, stored.calibration_id)
+    if capture is not None and capture.calibration_id is not None:
+        calibration = db.get(Calibration, capture.calibration_id)
         if calibration is not None and calibration.reference_cuff_reading_id is not None:
             reference = db.get(CuffReading, calibration.reference_cuff_reading_id)
 
-    # A cuff reading taken as part of this check supersedes the reference for wording.
+    # A cuff reading taken during this check supersedes the reference for wording. For a BP-only
+    # check it *is* the measurement, so the window opens at the check rather than at a capture.
     confirmed = db.execute(
         select(CuffReading)
         .where(
-            CuffReading.episode_id == stored.episode_id,
-            CuffReading.taken_at >= stored.started_at,
+            CuffReading.episode_id == check.episode_id,
+            CuffReading.taken_at >= check.started_at,
         )
         .order_by(desc(CuffReading.taken_at))
         .limit(1)
     ).scalar_one_or_none()
 
-    quality = stored.quality or {}
+    quality = (capture.quality if capture is not None else None) or {}
     # "HR near resting" is not measured directly; motion is the proxy the capture reports, and it
     # is the same signal the comparability rows in section 24 are really about.
     motion = quality.get("motion_index")
     hr_near_resting = motion is None or float(motion) < 0.5
 
     return InsightFeatures(
-        sensor_mode=estimate is not None or stored.status is SessionStatus.COMPLETED,
+        sensor_mode=check.mode is CheckMode.SENSOR,
         trend_direction=estimate.direction if estimate is not None else None,
         deviation_state=estimate.deviation_state if estimate is not None else None,
         reference_systolic=reference.systolic_mmhg if reference is not None else None,
@@ -256,15 +417,21 @@ def _build_features(db, stored: MeasurementSession, context: SessionContext | No
         confirmed_systolic=confirmed.systolic_mmhg if confirmed is not None else None,
         confirmed_diastolic=confirmed.diastolic_mmhg if confirmed is not None else None,
         hr_near_resting=hr_near_resting,
-        precondition_standard=True,
-        medication_status=(
-            context.medication_status_today if context is not None else None
-        ),
+        # PRE-01's actual answers. Absent is treated as standard: the matrix's comparability rows
+        # are about a *reported* confounder, and inventing one would refuse a check nobody said
+        # anything wrong about.
+        precondition_standard=precondition is None or precondition.is_ready,
+        medication_status=(context.medication_status_today if context is not None else None),
         sleep_less_than_usual=context.sleep_less_than_usual if context is not None else False,
         stress_higher_than_usual=(
             context.stress_higher_than_usual if context is not None else False
         ),
-        session_rejected=stored.status is SessionStatus.REJECTED,
+        # A sensor check with no usable capture produced nothing. A BP-only check never has one,
+        # and its measurement is the confirmed reading, so it is not "rejected" for lacking it.
+        session_rejected=(
+            check.mode is CheckMode.SENSOR
+            and (capture is None or capture.status is SessionStatus.REJECTED)
+        ),
     )
 
 
@@ -305,7 +472,8 @@ def read_insight(session_id: uuid.UUID, db: DbDep, principal: PrincipalDep) -> d
         )
 
     context = _latest_context(db, stored.id)
-    insight = evaluate(_build_features(db, stored, context))
+    precondition = _latest_precondition(db, stored.id)
+    insight = evaluate(_build_features(db, stored, context, precondition))
 
     return {
         "session_id": str(stored.id),
