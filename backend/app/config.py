@@ -45,6 +45,11 @@ class DeviationSettings(BaseSettings):
     # The spec requires the window but does not name a value; this is a design choice.
     persistence_window_hours: int = 48
 
+    #: Section 17: SIG-02 offers another attempt, SIG-03 does not. Three is the count the PM spec's
+    #: repeated-failure screen is written around ("3 unsuccessful attempts") and the same ceiling
+    #: the handset counts against in `check_session.dart`.
+    max_capture_attempts: int = 3
+
     # Trimming rule is fixed by BUILD_SPEC 4.3 ("discard beyond 1.5 x IQR"), the standard Tukey
     # fence. Exposed as configuration so it is not a literal in the engine.
     iqr_fence_multiplier: float = 1.5
@@ -226,6 +231,30 @@ class DeviceEligibilitySettings(BaseSettings):
     require_realtime_timestamp_source_for_qualified: bool = True
 
 
+class ReferenceSettings(BaseSettings):
+    """The BP reference lifecycle and the monitoring-gap rule (PM spec sections 12 and 27).
+
+    Invariant 10: these are the thresholds that decide when a patient is asked for a fresh cuff
+    reading, so they are configuration and each default carries its source.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="TERA_REFERENCE_", extra="ignore")
+
+    #: How long a reference stays valid before a refresh is requested. PM spec section 27 states
+    #: the monitoring-gap rule in terms of "no sensor check for a while" rather than a number; 14
+    #: days is an engineering choice matching the two-week rhythm of the proposal's home-monitoring
+    #: schedule, not a validated clinical figure.
+    reference_validity_days: int = 14
+
+    #: A gap in *sensor* checks long enough that the trend can no longer be read against the
+    #: existing baseline. Section 27's "monitoring gap". Same standing as the figure above.
+    monitoring_gap_days: int = 30
+
+    #: Section 12: rest before a reference reading. Stated in the spec's BPREF-01 copy as five
+    #: minutes, and surfaced here so the copy and the rule cannot drift apart.
+    reference_rest_minutes: int = 5
+
+
 class SecuritySettings(BaseSettings):
     """Auth, nonce, idempotency and rate limiting (BUILD_SPEC 4.5)."""
 
@@ -348,6 +377,7 @@ class Settings(BaseSettings):
     plausibility: PlausibilitySettings = Field(default_factory=PlausibilitySettings)
     device: DeviceEligibilitySettings = Field(default_factory=DeviceEligibilitySettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
+    reference: ReferenceSettings = Field(default_factory=ReferenceSettings)
     rhythm_model: RhythmModelSettings = Field(default_factory=RhythmModelSettings)
 
 

@@ -160,6 +160,46 @@ Request body: `Body_issue_tokens_v1_auth_token_post`
 | `200` | Successful Response |
 | `422` | Validation Error |
 
+### `POST /v1/bp-reference`
+
+**Make a confirmed cuff reading the active reference**
+
+Activate a reference, superseding the current one.
+
+The reading must already exist, must belong to this patient, and must be a real cuff
+measurement — all three are checked here rather than trusted, because this is the value every
+later trend is read against.
+
+Request body: `BpReferenceCreate`
+
+| Response | Description |
+|---|---|
+| `201` | Successful Response |
+| `422` | Validation Error |
+
+### `GET /v1/bp-reference/current`
+
+**The active reference, if there is one**
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+
+### `GET /v1/bp-reference/status`
+
+**Whether a cuff reading is needed before the next check**
+
+Section 11's routing question, answered from stored facts.
+
+Bias toward asking (invariant 7). Every ambiguous case — no reference, no reading behind it,
+an unreadable date — resolves to `needs_refresh = true`. The cost of asking is one cuff
+measurement; the cost of not asking is a trend read against a baseline that no longer
+describes the patient.
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+
 ### `POST /v1/calibrations`
 
 **Establish a calibration, superseding any active one for the same device**
@@ -208,6 +248,51 @@ Request body: `CheckSessionCreate`
 ### `GET /v1/check-sessions/{session_id}`
 
 **A check session**
+
+| Parameter | In | Required |
+|---|---|---|
+| `session_id` | path | yes |
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+| `422` | Validation Error |
+
+### `POST /v1/check-sessions/{session_id}/capture`
+
+**Report the outcome of one capture attempt**
+
+Section 17's three-state quality gate, recorded against the session.
+
+**This route carries no signal** (invariant 2). The handset ran its own gate — it has to, the
+verdict drives what the patient sees within a second of the capture ending — and reports which
+of the three states it reached. Derived per-beat intervals still travel by their own road,
+``POST /v1/sessions``, which stays the only route that accepts them.
+
+A BP-only check has no capture, so asking for one is refused rather than quietly recorded:
+a bp_only session walked through the capture states would produce a history entry describing
+a measurement that never happened.
+
+| Parameter | In | Required |
+|---|---|---|
+| `session_id` | path | yes |
+
+Request body: `CaptureIn`
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+| `422` | Validation Error |
+
+### `POST /v1/check-sessions/{session_id}/complete`
+
+**Close a check**
+
+The terminal transition. Stamps ``completed_at``.
+
+The insight is deliberately **not** generated here. It is a pure function of rows that already
+exist (``GET .../insight``), so computing and storing one at completion would create a second
+copy free to drift from the facts it summarises.
 
 | Parameter | In | Required |
 |---|---|---|
@@ -292,6 +377,52 @@ Request body: `PreconditionCreate`
 | `201` | Successful Response |
 | `422` | Validation Error |
 
+### `POST /v1/check-sessions/{session_id}/process`
+
+**Move a check into processing**
+
+PROC-01 and PROC-02.
+
+Carries nothing: whatever is being processed is already stored — the capture for a sensor
+check, the confirmed cuff reading for a BP-only one. The route exists so the session's status
+reflects where the patient actually is, which is what History reads back.
+
+| Parameter | In | Required |
+|---|---|---|
+| `session_id` | path | yes |
+
+Request body: `ProcessIn`
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+| `422` | Validation Error |
+
+### `GET /v1/conditions`
+
+**Reported conditions**
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+
+### `POST /v1/conditions`
+
+**Replace the condition list**
+
+The whole list, not a delta.
+
+PROF-03 is a checklist, and a patient unticking something has to be able to say so — which a
+delta API cannot express without a second verb. Codes are validated against the spec's closed
+list in the schema, so a typo is a 422 rather than a row nobody can query later.
+
+Request body: `ConditionsIn`
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+| `422` | Validation Error |
+
 ### `POST /v1/cuff-readings`
 
 **Submit a user-confirmed cuff reading**
@@ -338,6 +469,40 @@ Re-render a stored profile, recomputing the findings from the stored measurement
 | Response | Description |
 |---|---|
 | `200` | Successful Response |
+| `422` | Validation Error |
+
+### `GET /v1/device/current`
+
+**The most recent verdict for this patient's handset**
+
+The latest graded profile.
+
+404 when the handset has never been probed, which the app reads as "run DEV-01". It is not an
+error state: it is the answer on a fresh install, and it is why the check flow treats an
+unchecked device as not eligible rather than assuming.
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+
+### `POST /v1/device/eligibility`
+
+**DEV-01 — grade this handset and store the verdict**
+
+Grade the handset from what it measured, and record it.
+
+The patient comes from the token, never the body: a device profile is attached to a patient
+record, and letting a request name the patient would let one handset write a verdict onto
+somebody else's account.
+
+Nothing here estimates a figure the probe failed to produce (invariant 9). A handset that
+could not measure its accelerometer reports zero and is graded on that.
+
+Request body: `DeviceEligibilityIn`
+
+| Response | Description |
+|---|---|
+| `201` | Successful Response |
 | `422` | Validation Error |
 
 ### `GET /v1/episodes`
@@ -407,6 +572,106 @@ Request body: `EventCreate`
 | `201` | Successful Response |
 | `422` | Validation Error |
 
+### `GET /v1/history`
+
+**HIST-01 — the patient's own record**
+
+Everything recorded for this patient in the window, newest first.
+
+One flat list of typed entries rather than four parallel arrays: HIST-01 renders a single
+reverse-chronological column, and interleaving four lists client-side is how two clients end
+up ordering the same history differently.
+
+| Parameter | In | Required |
+|---|---|---|
+| `range` | query | no |
+| `type` | query | no |
+| `limit` | query | no |
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+| `422` | Validation Error |
+
+### `GET /v1/history/{event_id}`
+
+**HIST-02 — one history entry**
+
+One entry, looked up by id across the four kinds.
+
+The id alone does not say which table it came from, so all four are tried. Cross-tenant ids
+are 404 like everywhere else — a 403 would confirm the row exists.
+
+| Parameter | In | Required |
+|---|---|---|
+| `event_id` | path | yes |
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+| `422` | Validation Error |
+
+### `GET /v1/medications`
+
+**The medication list**
+
+Active medications by default; stopped ones on request.
+
+| Parameter | In | Required |
+|---|---|---|
+| `include_stopped` | query | no |
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+| `422` | Validation Error |
+
+### `POST /v1/medications`
+
+**Add a medication**
+
+Request body: `app__schemas__phr__MedicationIn`
+
+| Response | Description |
+|---|---|
+| `201` | Successful Response |
+| `422` | Validation Error |
+
+### `POST /v1/medications/{medication_id}`
+
+**Correct a medication**
+
+A correction, field by field. An absent field means unchanged, not cleared.
+
+| Parameter | In | Required |
+|---|---|---|
+| `medication_id` | path | yes |
+
+Request body: `MedicationUpdate`
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+| `422` | Validation Error |
+
+### `POST /v1/medications/{medication_id}/stop`
+
+**Stop taking a medication**
+
+Section 30's ``DELETE``, as the status transition the data model already provides.
+
+Idempotent: stopping an already-stopped medication returns it unchanged rather than erroring,
+so a retried request after a dropped response is not a failure.
+
+| Parameter | In | Required |
+|---|---|---|
+| `medication_id` | path | yes |
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+| `422` | Validation Error |
+
 ### `GET /v1/patient-context`
 
 **The patient's context currently in force**
@@ -457,6 +722,20 @@ Request body: `PhrProfilePatch`
 |---|---|
 | `200` | Successful Response |
 | `422` | Validation Error |
+
+### `GET /v1/profile/completion`
+
+**How much of the profile has been filled in**
+
+A count of sections answered.
+
+**Nothing here reads a value.** It reports whether a field is filled, never whether what is in
+it is good or bad — invariant 6, and the spec's own instruction that a BMI must not be
+computed or judged.
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
 
 ### `POST /v1/sessions`
 
@@ -521,6 +800,65 @@ Drives the Phase 2 session-detail screen.
 | `client_id` | string \| null | no |
 | `client_secret` | string \| null | no |
 
+### `BpReferenceCreate`
+
+`POST /v1/bp-reference` — make a confirmed cuff reading the active baseline.
+
+Takes a reading id rather than numbers. The reading has already been through the plausibility
+gate and been confirmed by a person; re-posting the values here would be a second, unguarded
+door into the only table that holds mmHg (invariant 1).
+
+| Field | Type | Required |
+|---|---|---|
+| `cuff_reading_id` | string | yes |
+| `refresh_reason` | BpReferenceRefreshReason | no |
+
+### `BpReferenceOut`
+
+| Field | Type | Required |
+|---|---|---|
+| `synthetic` | boolean | yes |
+| `synthetic_notice` | string \| null | no |
+| `id` | string | yes |
+| `patient_id` | string | yes |
+| `cuff_reading_id` | string | yes |
+| `activated_at` | string | yes |
+| `deactivated_at` | string \| null | yes |
+| `refresh_reason` | BpReferenceRefreshReason | yes |
+| `status` | BpReferenceStatus | yes |
+| `reading` | ReferenceReadingOut | yes |
+
+### `BpReferenceRefreshReason`
+
+PM spec section 28's refresh reasons, verbatim.
+
+Recorded rather than inferred: the reason a reference was replaced is a fact about why, and
+section 27's monitoring-gap rule reads it back.
+
+### `BpReferenceStatus`
+
+PM spec section 28's ``bp_references.status``.
+
+Exactly one row per patient may be ``active``; the partial unique index enforces it, the same
+way :class:`CalibrationStatus` does for calibrations.
+
+### `BpReferenceStatusOut`
+
+`GET /v1/bp-reference/status` — section 30's worked example, and section 27's rule.
+
+The handset already computes a version of this locally so the flow works offline. This is the
+server's answer, and it is the one that survives a reinstall: `last_sensor_check_at` and the
+medication-change flag are both facts the handset cannot know on a fresh install.
+
+| Field | Type | Required |
+|---|---|---|
+| `has_reference` | boolean | yes |
+| `needs_refresh` | boolean | yes |
+| `reason` | BpReferenceRefreshReason \| null | no |
+| `last_sensor_check_at` | string \| null | no |
+| `current_reference` | ReferenceReadingOut \| null | no |
+| `reference_age_days` | integer \| null | no |
+
 ### `CalibrationCreate`
 
 POST /v1/calibrations — establish or supersede a baseline.
@@ -564,6 +902,21 @@ Invariant 4 — at most one active calibration per patient per device.
 
 Android INFO_SUPPORTED_HARDWARE_LEVEL.
 
+### `CaptureIn`
+
+`POST /v1/check-sessions/{id}/capture` — the quality-gate outcome for one attempt.
+
+**No waveform, by construction** (invariant 2). The handset has already run its own gate and
+reports what happened: accepted, retry, or out of attempts. There is no field here that could
+carry a sample buffer, and `measurement_session` remains the only route by which a derived
+per-beat interval enters the system.
+
+| Field | Type | Required |
+|---|---|---|
+| `accepted` | boolean | yes |
+| `attempt_number` | integer | yes |
+| `reason` | string \| null | no |
+
 ### `CheckMode`
 
 PM spec section 28. The two product loops.
@@ -589,6 +942,22 @@ PM spec section 28. The two product loops.
 | `status` | CheckSessionStatus | yes |
 | `started_at` | string | yes |
 | `completed_at` | string \| null | yes |
+
+### `CheckSessionStateOut`
+
+A session and where the section 31 state machine now has it.
+
+| Field | Type | Required |
+|---|---|---|
+| `synthetic` | boolean | yes |
+| `synthetic_notice` | string \| null | no |
+| `id` | string | yes |
+| `episode_id` | string | yes |
+| `mode` | CheckMode | yes |
+| `status` | CheckSessionStatus | yes |
+| `started_at` | string | yes |
+| `completed_at` | string \| null | yes |
+| `refused_reason` | string \| null | no |
 
 ### `CheckSessionStatus`
 
@@ -620,6 +989,24 @@ The whole document.
 | `days_since_last_cuff_reading` | integer \| null | no |
 | `active_calibration_age_days` | integer \| null | no |
 | `unsynchronised_sessions` | integer | no |
+
+### `ConditionsIn`
+
+`PUT /v1/conditions` in the spec, POST here — the whole list, not a delta.
+
+Replacing wholesale is what the screen does: PROF-03 is a checklist, and a patient unticking
+something has to be able to say so. A delta API cannot express a removal without a second verb.
+
+| Field | Type | Required |
+|---|---|---|
+| `conditions` | array of string | no |
+
+### `ConditionsOut`
+
+| Field | Type | Required |
+|---|---|---|
+| `conditions` | array of string | yes |
+| `updated_at` | string | yes |
 
 ### `CuffReadingCreate`
 
@@ -672,6 +1059,51 @@ does not exist.
 ### `DeviationState`
 
 BUILD_SPEC 4.3 — a single deviating session never triggers a cuff request.
+
+### `DeviceEligibilityIn`
+
+`POST /v1/device/eligibility` — DEV-01's measurements.
+
+The same measured fields as :class:`DeviceProfileCreate` **minus `patient_id`**: this route is
+called by the patient's own handset, so the patient comes from the token. A body that could
+name a patient would let one handset write a hardware verdict onto somebody else's account.
+
+Every field is measured. Invariant 9: a probe that could not measure something must say so
+rather than substitute a plausible number.
+
+| Field | Type | Required |
+|---|---|---|
+| `model` | string | yes |
+| `os_version` | string | yes |
+| `accel_rate_hz` | number | yes |
+| `camera_fps` | number | yes |
+| `camera_hw_level` | CameraHardwareLevel | yes |
+| `manual_sensor` | boolean | yes |
+| `timestamp_source` | TimestampSource | yes |
+| `clock_offset_sd_ms` | number | yes |
+
+### `DeviceEligibilityOut`
+
+DEV-02 / DEV-03's answer, in the app's two-way vocabulary.
+
+``qualified_status`` is carried alongside rather than replaced: the profiler's three bands are
+the real verdict and the app's binary is a routing decision derived from it. A screen that
+wants to say "your phone meets the minimum but not the target" still can.
+
+| Field | Type | Required |
+|---|---|---|
+| `synthetic` | boolean | yes |
+| `synthetic_notice` | string \| null | no |
+| `device_profile_id` | string | yes |
+| `eligibility_status` | enum | yes |
+| `qualified_status` | QualifiedStatus | yes |
+| `model` | string | yes |
+| `os_version` | string | yes |
+| `accelerometer_supported` | boolean | yes |
+| `camera_supported` | boolean | yes |
+| `flash_supported` | boolean | yes |
+| `checked_at` | string | yes |
+| `detail` | string \| null | no |
 
 ### `DeviceProfileCreate`
 
@@ -792,6 +1224,44 @@ Discriminator for POST /v1/events.
 |---|---|---|
 | `detail` | array of ValidationError | no |
 
+### `HistoryEntryOut`
+
+One thing that happened, of one of four kinds.
+
+**The mmHg fields are populated only for ``cuff_reading``** and are absent everywhere else —
+invariant 1, structurally: a trend entry has no field that could carry a pressure value, so no
+client can render one against an estimate however hard it tries. ``badge`` travels with the
+numbers for the same reason: a confirmed cuff reading is labelled as one wherever it appears.
+
+| Field | Type | Required |
+|---|---|---|
+| `synthetic` | boolean | yes |
+| `synthetic_notice` | string \| null | no |
+| `id` | string | yes |
+| `entry_type` | enum | yes |
+| `occurred_at` | string | yes |
+| `systolic_mmhg` | integer \| null | no |
+| `diastolic_mmhg` | integer \| null | no |
+| `pulse_bpm` | integer \| null | no |
+| `unit` | const `mmHg` \| null | no |
+| `badge` | string \| null | no |
+| `direction` | string \| null | no |
+| `magnitude_sd` | number \| null | no |
+| `deviation_state` | string \| null | no |
+| `rejection_reason` | string \| null | no |
+| `mode` | string \| null | no |
+| `check_status` | string \| null | no |
+
+### `HistoryOut`
+
+`GET /v1/history?range=7d&type=all`.
+
+| Field | Type | Required |
+|---|---|---|
+| `range` | string | yes |
+| `type` | string | yes |
+| `entries` | array of HistoryEntryOut | no |
+
 ### `HypertensionStatus`
 
 PM spec ONB-03. Reported by the patient, never inferred.
@@ -805,12 +1275,34 @@ Ending a session means revoking its refresh token; the access token expires on i
 | `refresh_token` | string \| null | no |
 | `all_sessions` | boolean | no |
 
-### `MedicationIn`
+### `MedicationIn-Output`
 
 | Field | Type | Required |
 |---|---|---|
 | `name` | string | yes |
 | `dose` | string | no |
+
+### `MedicationOut`
+
+| Field | Type | Required |
+|---|---|---|
+| `synthetic` | boolean | yes |
+| `synthetic_notice` | string \| null | no |
+| `id` | string | yes |
+| `name` | string | yes |
+| `dose` | string | yes |
+| `frequency` | string | yes |
+| `started_at` | string \| null | yes |
+| `last_changed_at` | string \| null | yes |
+| `status` | MedicationStatus | yes |
+
+### `MedicationStatus`
+
+PM spec section 28's ``medications.status``.
+
+The reason ``DELETE /medications/{id}`` does not need to delete anything: a medication someone
+stopped taking is not a row that never existed, and the history of what was being taken when a
+reading was recorded is part of reading that record later.
 
 ### `MedicationStatusToday`
 
@@ -818,6 +1310,20 @@ PM spec CTX-01.
 
 Four-valued: "not applicable" and "not sure" are different from each other and from no, and
 collapsing them would record a statement the patient did not make.
+
+### `MedicationUpdate`
+
+`POST /v1/medications/{id}` — a correction, field by field.
+
+A mistyped dose is a correction to what someone is taking now, not a new fact about a
+different moment, which is why `medication` is mutable where the clinical tables are not.
+
+| Field | Type | Required |
+|---|---|---|
+| `name` | string \| null | no |
+| `dose` | string \| null | no |
+| `frequency` | string \| null | no |
+| `started_at` | string \| null | no |
 
 ### `NextAction`
 
@@ -850,7 +1356,7 @@ context against somebody else's record by editing a request body.
 | Field | Type | Required |
 |---|---|---|
 | `last_regimen_change_date` | string \| null | no |
-| `medications` | array of MedicationIn | no |
+| `medications` | array of app__schemas__context__MedicationIn | no |
 | `pregnant` | PregnancyAnswer | yes |
 | `known_arrhythmia` | boolean | yes |
 | `last_clinic_systolic_mmhg` | integer \| null | no |
@@ -869,7 +1375,7 @@ The context in force. Append-only, so this is the most recent row, not the only 
 | `patient_id` | string | yes |
 | `recorded_at` | string | yes |
 | `last_regimen_change_date` | string \| null | yes |
-| `medications` | array of MedicationIn | yes |
+| `medications` | array of MedicationIn-Output | yes |
 | `pregnant` | PregnancyAnswer | yes |
 | `known_arrhythmia` | boolean | yes |
 | `last_clinic_systolic_mmhg` | integer \| null | yes |
@@ -895,6 +1401,15 @@ and weight are returned as given and never combined.
 | `hypertension_status` | HypertensionStatus \| null | yes |
 | `taking_bp_medication` | boolean \| null | yes |
 | `conditions` | array of string | yes |
+| `family_bp_history` | string \| null | yes |
+| `physical_activity` | string \| null | yes |
+| `smoking_status` | string \| null | yes |
+| `usual_sleep_hours` | string \| null | yes |
+| `usual_stress_level` | string \| null | yes |
+| `alcohol_frequency` | string \| null | yes |
+| `pregnancy_hypertension_history` | string \| null | yes |
+| `family_early_cardiac_history` | boolean \| null | yes |
+| `medications` | array of object \| null | yes |
 | `updated_at` | string | yes |
 
 ### `PhrProfilePatch`
@@ -913,6 +1428,15 @@ against somebody else's record by changing a request body.
 | `hypertension_status` | HypertensionStatus \| null | no |
 | `taking_bp_medication` | boolean \| null | no |
 | `conditions` | array of string \| null | no |
+| `family_bp_history` | string \| null | no |
+| `physical_activity` | string \| null | no |
+| `smoking_status` | string \| null | no |
+| `usual_sleep_hours` | string \| null | no |
+| `usual_stress_level` | string \| null | no |
+| `alcohol_frequency` | string \| null | no |
+| `pregnancy_hypertension_history` | string \| null | no |
+| `family_early_cardiac_history` | boolean \| null | no |
+| `medications` | array of object \| null | no |
 
 ### `Posture`
 
@@ -957,9 +1481,44 @@ A patient who declines to answer has given a different answer from "no". Collaps
 would record a statement they did not make, and only ``YES`` closes the safety gate — see
 ``docs/decisions.md``.
 
+### `ProcessIn`
+
+`POST /v1/check-sessions/{id}/process` — move a session into processing.
+
+Carries nothing. What is being processed is already stored: the capture for a sensor check,
+the confirmed cuff reading for a BP-only one.
+
+### `ProfileCompletionOut`
+
+`GET /v1/profile/completion` — what PROF-01 renders as a progress meter.
+
+A count of sections answered, and **nothing derived from the answers themselves**. It says
+whether a field is filled, never whether the value in it is good or bad: invariant 6, and the
+spec's own instruction not to judge a patient by their BMI.
+
+| Field | Type | Required |
+|---|---|---|
+| `complete` | boolean | yes |
+| `completed_sections` | array of string | yes |
+| `missing_sections` | array of string | yes |
+| `percent` | integer | yes |
+
 ### `QualifiedStatus`
 
 Device eligibility verdict returned by POST /v1/device-profiles.
+
+### `ReferenceReadingOut`
+
+The numbers, quoted from the reading the reference points at.
+
+| Field | Type | Required |
+|---|---|---|
+| `systolic` | integer | yes |
+| `diastolic` | integer | yes |
+| `pulse` | integer \| null | no |
+| `measured_at` | string | yes |
+| `unit` | const `mmHg` | no |
+| `badge` | const `CONFIRMED — UPPER-ARM CUFF` | no |
 
 ### `RefreshRequest`
 
@@ -1424,4 +1983,25 @@ Role claim carried in the JWT (BUILD_SPEC 4.5).
 | `type` | string | yes |
 | `input` | object | no |
 | `ctx` | object | no |
+
+### `app__schemas__context__MedicationIn`
+
+| Field | Type | Required |
+|---|---|---|
+| `name` | string | yes |
+| `dose` | string | no |
+
+### `app__schemas__phr__MedicationIn`
+
+`POST /v1/medications` — PROF-04.
+
+``status`` is not accepted on create: a medication you are adding is one you are taking. It
+changes through the stop route, which is the only transition that exists.
+
+| Field | Type | Required |
+|---|---|---|
+| `name` | string | yes |
+| `dose` | string | yes |
+| `frequency` | string | yes |
+| `started_at` | string \| null | no |
 

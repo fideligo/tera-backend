@@ -1283,3 +1283,133 @@ roughly one run in fifty — which is how it surfaced here, unrelated to this ch
 `target` is now checked *structurally* — it parses as a UUID, so it cannot carry a clinical value —
 and excluded from the substring scan. A flaky invariant test is worse than no invariant test:
 people learn to re-run it.
+
+## Section 28 and 30 completed: the gaps, and what was already there
+
+The brief was "build the backend foundation: sections 28 and 30". Most of it existed. Recording
+what was genuinely missing, so the next person does not re-audit the same ground.
+
+**Already built, before this change.** `users` (`app_user` + `patient`), `devices`
+(`device_profile`), `phr_profiles`, `medications`, `check_sessions`, `preconditions`,
+`session_context`, `trend_results` (`trend_estimate`), and the endpoints for auth, profile,
+check-session creation, preconditions, context and insight. `health_conditions`,
+`lifestyle_profiles` and `family_history` are folded into `phr_profile` as columns rather than
+tables — a deviation argued in the 0011 entry, taken because a table per single-valued answer buys
+per-field timestamps nobody collects.
+
+**Genuinely missing, now built.**
+
+- `bp_reference` — the last table in section 28 with no home. Which cuff reading is a patient's
+  baseline lived only in `AppFlowState.reference` on the handset, so it did not survive a
+  reinstall and the server could not read it.
+- `/v1/bp-reference` × 3, `/v1/medications` × 4, `/v1/conditions` × 2, `/v1/profile/completion`,
+  `/v1/device/eligibility`, `/v1/device/current`, `/v1/history` × 2, and the three check-session
+  transitions `/capture`, `/process`, `/complete`.
+
+**`insights` is deliberately still not a table.** Section 28 models it as stored. The insight is a
+pure function of rows that already exist and `GET .../insight` computes it on read, so persisting
+one would create a second copy free to drift from the facts it summarises. `sensor_measurements`
+and `signal_quality` likewise remain `measurement_session` columns rather than separate tables.
+
+### The BP reference is a pointer, not a copy
+
+`bp_reference` names a `cuff_reading`; it does not restate the numbers. Copying systolic and
+diastolic into it would put mmHg in a second table and create a way for the two to disagree —
+invariant 1 says there is exactly one table holding pressure.
+
+Supersession mirrors `calibration` exactly: a partial unique index allows one `active` row per
+patient, a one-way trigger permits retiring an active reference and forbids everything else, and
+replacing a reference inserts. `bp_reference` is therefore **not** in `CLINICAL_TABLES` — like
+`calibration`, its supersession columns are the one sanctioned mutation and the append-only
+trigger would forbid them. Same argument as CLAUDE.md section 5.
+
+`GET /bp-reference/status` biases toward asking (invariant 7): no reference, an unreadable
+reading, an unresolvable date all answer `needs_refresh: true`. A false request costs one cuff
+measurement; a false "you are fine" is read against a baseline that no longer describes the
+patient.
+
+### DELETE /medications/{id} is a status transition
+
+Section 30 lists a DELETE. Section 28 gives `medications` a `status` column, which is the spec
+answering its own question: a medication somebody stopped is not a row that never existed, and
+what a patient was taking when a reading was recorded is part of reading that record later.
+`POST /medications/{id}/stop` sets the status; nothing is deleted. Invariant 5 says the same thing
+about clinical history generally, and the OpenAPI-walking test refuses the verb outright.
+
+Every mutating route added here is POST for that reason — `PATCH /profile`, `PUT /conditions` and
+`PATCH /medications/{id}` in section 30 are all POST here. Section 30 opens with "Route names are
+examples"; the invariant is the part that is load-bearing.
+
+### A medication change forces a reference refresh
+
+PROF-04 requires it and until now nothing set the flag. Add, correct or stop a medication and
+`monitoring_episode.force_reference_refresh` goes true for that patient; activating a new
+reference clears it. The baseline was established under one medication regime, and reading a trend
+against it afterwards compares two different states of the same person.
+
+### The check-session state machine is one table, not four handlers
+
+Section 31's diagram is written down once, as `_ALLOWED_FROM` in `phr.py`, and every transition
+route consults it. Transitions are **idempotent**: asking for the state a session is already in
+succeeds and changes nothing, because a handset retrying after a dropped response is the ordinary
+case and a 409 there would strand a patient mid-flow with no way forward. Illegal transitions and
+transitions out of a terminal state are 409 with the reason in words.
+
+`POST .../capture` carries **no signal** (invariant 2). It reports which of section 17's three
+gate states the handset reached; derived per-beat intervals still travel by `POST /v1/sessions`,
+which stays the only route that accepts them. A `bp_only` session refuses the route outright
+rather than recording a capture that never happened.
+
+### Two device vocabularies, collapsed in exactly one place
+
+The profiler grades `qualified` / `provisional` / `not_qualified`; the app branches two ways.
+`/v1/device/eligibility` collapses them, and `provisional` maps to **eligible** — the proposal's
+minimum band is the minimum at which a capture is meaningful, and refusing it would put a working
+handset on the BP-only path. The three-way verdict is returned alongside so nothing is lost.
+
+Unlike `POST /v1/device-profiles`, this route takes no `patient_id`: it is called by the patient's
+own handset and the patient comes from the token. A body that could name a patient would let one
+handset write a hardware verdict onto somebody else's account.
+
+### History is one list, not four
+
+`GET /v1/history` returns typed entries in one reverse-chronological list, because HIST-01 renders
+one column and four parallel arrays leave the interleaving — and therefore the ordering — to each
+client. The mmHg fields exist only on `cuff_reading` entries: a trend entry has no field that
+could carry a pressure value, so invariant 1 holds structurally rather than by discipline.
+Rejected sessions appear (invariant 3, and section 26.3 asks for them by name).
+
+It is patient-scoped rather than episode-scoped, unlike `/v1/episodes/{id}/timeline`, which stays
+as the clinician-facing view of one episode.
+
+### `/api/v1` is mounted as an alias
+
+Section 30 writes `/api/v1/...`; this API has served `/v1/...` since 0001 and the patient app is
+built against it. The router is mounted twice, with the `/api` copy `include_in_schema=False` — one
+operation appearing twice would double `docs/api.md` and hand the schema-walking invariant tests
+two copies of every route.
+
+### Fixed on the way past: GET /profile returned 500
+
+`_profile_out` listed its fields by hand and was never extended when migration 0011 added nine
+columns. `PhrProfileOut` declares them without defaults, so every call raised a ValidationError.
+It now builds from `model_fields`, so the next column to land cannot reintroduce the bug.
+
+### Three latent faults in the uncommitted 0011 work, found by running it
+
+Migration 0011 was on disk untracked and had never been exercised against a live request. Three
+halves of it were missing, all with the same shape — the migration changed the database and the
+model was not brought with it:
+
+1. **`medication.status` and the seven PHR answer columns** were created as native Postgres enums
+   and declared `sa.String` on the model. Reads work; every write and every `WHERE` fails with
+   `operator does not exist: medication_status = character varying`. `POST /v1/profile`,
+   `GET /v1/medications` and `POST /v1/conditions` all returned 500.
+2. **`monitoring_episode.force_reference_refresh`** existed in the database and not on the model,
+   so PROF-04's flag could be neither read nor written by anything.
+3. **`_profile_out`** listed its fields by hand and never gained 0011's nine columns, so
+   `GET /v1/profile` raised a ValidationError on every call.
+
+All three are fixed. The last one now builds from `PhrProfileOut.model_fields` so the next column
+cannot reintroduce it. The lesson worth keeping: a migration that has not served a request has not
+been tested, and `pytest` did not catch any of the three because no test touched those columns.

@@ -155,7 +155,10 @@ class AuditAction(str, Enum):
     PHR_PROFILE_UPDATED = "phr_profile_updated"
     SESSION_CONTEXT_RECORDED = "session_context_recorded"
     CHECK_SESSION_CREATED = "check_session_created"
+    CHECK_SESSION_ADVANCED = "check_session_advanced"
     PRECONDITIONS_RECORDED = "preconditions_recorded"
+    MEDICATIONS_UPDATED = "medications_updated"
+    BP_REFERENCE_ACTIVATED = "bp_reference_activated"
     CALIBRATION_ESTABLISHED = "calibration_established"
     CALIBRATION_SUPERSEDED = "calibration_superseded"
     EVENT_RECORDED = "event_recorded"
@@ -231,3 +234,41 @@ class CheckSessionStatus(str, Enum):
     COMPLETED = "completed"
     ABANDONED = "abandoned"
     FAILED_QUALITY = "failed_quality"
+
+
+class BpReferenceStatus(str, Enum):
+    """PM spec section 28's ``bp_references.status``.
+
+    Exactly one row per patient may be ``active``; the partial unique index enforces it, the same
+    way :class:`CalibrationStatus` does for calibrations.
+    """
+
+    ACTIVE = "active"
+    SUPERSEDED = "superseded"
+
+
+class BpReferenceRefreshReason(str, Enum):
+    """PM spec section 28's refresh reasons, verbatim.
+
+    Recorded rather than inferred: the reason a reference was replaced is a fact about why, and
+    section 27's monitoring-gap rule reads it back.
+    """
+
+    FIRST_REFERENCE = "first_reference"
+    MONITORING_GAP = "monitoring_gap"
+    MEDICATION_CHANGE = "medication_change"
+    PERSISTENT_TREND = "persistent_trend"
+    MANUAL_REFRESH = "manual_refresh"
+    HEALTH_CHANGE = "health_change"
+
+
+class MedicationStatus(str, Enum):
+    """PM spec section 28's ``medications.status``.
+
+    The reason ``DELETE /medications/{id}`` does not need to delete anything: a medication someone
+    stopped taking is not a row that never existed, and the history of what was being taken when a
+    reading was recorded is part of reading that record later.
+    """
+
+    ACTIVE = "active"
+    STOPPED = "stopped"

@@ -91,6 +91,21 @@ def load_episode(
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="episode not found")
 
 
+def require_patient(principal: Principal) -> uuid.UUID:
+    """The patient id behind the caller's token, or 403.
+
+    Every PHR route needs this and none of them may take a patient id from the request body: the
+    id comes from the token, so a profile cannot be edited against somebody else's record by
+    changing a payload.
+    """
+    if principal.patient_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only a patient account has a health record",
+        )
+    return principal.patient_id
+
+
 def assert_patient_scope(principal: Principal, patient_id: uuid.UUID) -> None:
     """A patient principal may only act on their own patient record.
 

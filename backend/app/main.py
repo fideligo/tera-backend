@@ -58,6 +58,15 @@ app = FastAPI(
 
 app.include_router(api_router)
 
+# The PM spec writes every route as `/api/v1/...`; this API has served `/v1/...` since 0001 and the
+# patient app is built against it. Both work: the same router is mounted a second time under
+# `/api`, so a client following section 30 literally is not wrong either.
+#
+# `include_in_schema=False` on the alias, deliberately. One operation appearing twice in the
+# OpenAPI schema would double `docs/api.md` and hand the invariant tests that walk that schema two
+# copies of every route to reason about. The canonical path is `/v1`; the alias is a courtesy.
+app.include_router(api_router, prefix="/api", include_in_schema=False)
+
 
 @app.get("/health", tags=["ops"], summary="Liveness probe")
 def health() -> dict[str, str]:

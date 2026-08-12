@@ -12,11 +12,15 @@ from app.api.v1 import (
     auth,
     calibrations,
     cuff_readings,
+    device,
     device_profiles,
     episodes,
     events,
+    history,
+    medications,
     patient_context,
     phr,
+    reference,
     sessions,
 )
 
@@ -30,5 +34,9 @@ api_router.include_router(phr.router)
 api_router.include_router(calibrations.router)
 api_router.include_router(events.router)
 api_router.include_router(episodes.router)
+api_router.include_router(device.router)
+api_router.include_router(medications.router)
+api_router.include_router(reference.router)
+api_router.include_router(history.router)
 
 __all__ = ["api_router"]

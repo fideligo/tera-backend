@@ -91,6 +91,13 @@ class MonitoringEpisode(UuidPkMixin, SyntheticMixin, Base):
     started_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
 
+    #: PROF-04: a medication change invalidates the BP reference, because the baseline was
+    #: established under a regime that no longer applies. Migration 0011 added the column and
+    #: never added it here, so nothing could read or write it.
+    force_reference_refresh: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.false(), default=False
+    )
+
     #: Per-episode clinical configuration (invariant 10). Keys, all optional, falling back to
     #: app.config defaults: ``cuff_schedule`` (free-form description plus interval_days),
     #: ``deviation_k``, ``min_beat_count``, ``persistence_window_hours``.

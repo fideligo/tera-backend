@@ -26,11 +26,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import desc, select
 
-from app.api.deps import DbDep, PrincipalDep, load_episode
+from app.api.deps import DbDep, PrincipalDep, SettingsDep, load_episode, require_patient
 from app.logging_config import get_logger
 from app.models import (
     AuditAction,
     Calibration,
+    Medication,
     CheckMode,
     CheckSession,
     CheckSessionStatus,
@@ -41,9 +42,13 @@ from app.models import (
     SessionContext,
     SessionStatus,
 )
+from app.api.v1.medications import active_medications, medication_out
 from app.schemas.phr import (
+    CaptureIn,
     CheckSessionCreate,
     CheckSessionOut,
+    CheckSessionStateOut,
+    ProcessIn,
     PhrProfileOut,
     PhrProfilePatch,
     PreconditionCreate,
@@ -58,27 +63,29 @@ router = APIRouter(tags=["phr"])
 log = get_logger(__name__)
 
 
-def _require_patient(principal) -> uuid.UUID:
-    if principal.patient_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="only a patient account has a health profile",
-        )
-    return principal.patient_id
+#: Moved to ``app.api.deps`` so the medications module can share it without importing this one.
+_require_patient = require_patient
 
 
-def _profile_out(row: PhrProfile) -> PhrProfileOut:
+def _profile_out(row: PhrProfile, medications: list[Medication] | None = None) -> PhrProfileOut:
+    """The stored profile, every field of it.
+
+    Built by field name from the model rather than by hand. The hand-written version omitted the
+    nine columns migration 0011 added — and because `PhrProfileOut` declares them without
+    defaults, every call to `GET /v1/profile` raised a ValidationError and returned 500. A list
+    that has to be extended by hand whenever a column lands is a list that will be wrong again.
+    """
     return PhrProfileOut(
         patient_id=row.patient_id,
-        date_of_birth=row.date_of_birth,
-        sex_assigned_at_birth=row.sex_assigned_at_birth,
-        height_cm=row.height_cm,
-        weight_kg=row.weight_kg,
-        hypertension_status=row.hypertension_status,
-        taking_bp_medication=row.taking_bp_medication,
         conditions=list(row.conditions),
-        updated_at=row.updated_at,
+        medications=[medication_out(m).model_dump(mode="json") for m in (medications or [])],
         synthetic=row.synthetic,
+        **{
+            field: getattr(row, field)
+            for field in PhrProfileOut.model_fields
+            if field not in {"patient_id", "conditions", "medications", "synthetic",
+                             "synthetic_notice"}
+        },
     )
 
 
@@ -92,7 +99,7 @@ def read_profile(db: DbDep, principal: PrincipalDep) -> PhrProfileOut:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="no profile has been recorded yet"
         )
-    return _profile_out(row)
+    return _profile_out(row, active_medications(db, patient_id))
 
 
 @router.post("/profile", response_model=PhrProfileOut, summary="Update the health profile")
@@ -127,7 +134,7 @@ def patch_profile(
     # the deny-list covers the ones with obvious names.
     log.info("phr_profile_updated", extra={"fields": sorted(supplied.keys())})
 
-    return _profile_out(row)
+    return _profile_out(row, active_medications(db, patient_id))
 
 
 def _load_session(session_id: uuid.UUID, principal, db):
@@ -481,3 +488,176 @@ def read_insight(session_id: uuid.UUID, db: DbDep, principal: PrincipalDep) -> d
         **_render(insight),
         "around_this_check": None if context is None else _context_out(context).as_features(),
     }
+
+
+# =============================================================================== state machine
+#
+# Section 31's diagram, written down once. Every transition route consults this table instead of
+# comparing statuses inline: a state machine spread across three handlers is three places for the
+# diagram and the code to drift apart.
+
+#: Which statuses each transition may be entered from. A session already in the destination state
+#: is handled before this is consulted.
+_ALLOWED_FROM: dict[CheckSessionStatus, frozenset[CheckSessionStatus]] = {
+    CheckSessionStatus.CAPTURE_PENDING: frozenset(
+        {
+            CheckSessionStatus.CREATED,
+            CheckSessionStatus.REFERENCE_PENDING,
+            CheckSessionStatus.PRECHECK_PENDING,
+            CheckSessionStatus.CONTEXT_PENDING,
+        }
+    ),
+    CheckSessionStatus.PROCESSING: frozenset(
+        {
+            CheckSessionStatus.CREATED,
+            CheckSessionStatus.REFERENCE_PENDING,
+            CheckSessionStatus.PRECHECK_PENDING,
+            CheckSessionStatus.CONTEXT_PENDING,
+            CheckSessionStatus.CAPTURE_PENDING,
+        }
+    ),
+    CheckSessionStatus.COMPLETED: frozenset(
+        {CheckSessionStatus.PROCESSING, CheckSessionStatus.CAPTURE_PENDING}
+    ),
+    CheckSessionStatus.FAILED_QUALITY: frozenset({CheckSessionStatus.CAPTURE_PENDING}),
+}
+
+#: Section 31: Completed and FailedQuality both go to [*]. Abandoned is terminal for the same
+#: reason even though the diagram does not draw it.
+_TERMINAL: frozenset[CheckSessionStatus] = frozenset(
+    {
+        CheckSessionStatus.COMPLETED,
+        CheckSessionStatus.FAILED_QUALITY,
+        CheckSessionStatus.ABANDONED,
+    }
+)
+
+
+def _state_out(row: CheckSession) -> CheckSessionStateOut:
+    return CheckSessionStateOut(
+        id=row.id,
+        episode_id=row.episode_id,
+        mode=row.mode,
+        status=row.status,
+        started_at=row.started_at,
+        completed_at=row.completed_at,
+        synthetic=row.synthetic,
+    )
+
+
+def _advance(db, principal, stored: CheckSession, to: CheckSessionStatus) -> CheckSessionStateOut:
+    """Move a session along the section 31 machine, or refuse and say why.
+
+    Idempotent by design: asking for the state a session is already in succeeds and changes
+    nothing. A handset retrying after a dropped response is the ordinary case rather than the
+    exceptional one, and a 409 there would strand a patient mid-flow with no way forward.
+    """
+    if stored.status is to:
+        return _state_out(stored)
+
+    if stored.status in _TERMINAL:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"this check is already {stored.status.value} and cannot be changed",
+        )
+
+    if stored.status not in _ALLOWED_FROM[to]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"a check in {stored.status.value} cannot move to {to.value}",
+        )
+
+    stored.status = to
+    if to is CheckSessionStatus.COMPLETED:
+        stored.completed_at = datetime.now(tz=timezone.utc)
+
+    db.flush()
+    audit.record(
+        db, principal=principal, action=AuditAction.CHECK_SESSION_ADVANCED, target=stored.id
+    )
+    db.commit()
+
+    log.info(
+        "check_session_advanced",
+        extra={"check_session_id": str(stored.id), "to_status": to.value},
+    )
+    return _state_out(stored)
+
+
+@router.post(
+    "/check-sessions/{session_id}/capture",
+    response_model=CheckSessionStateOut,
+    summary="Report the outcome of one capture attempt",
+)
+def record_capture(
+    session_id: uuid.UUID,
+    body: CaptureIn,
+    db: DbDep,
+    principal: PrincipalDep,
+    settings: SettingsDep,
+) -> CheckSessionStateOut:
+    """Section 17's three-state quality gate, recorded against the session.
+
+    **This route carries no signal** (invariant 2). The handset ran its own gate — it has to, the
+    verdict drives what the patient sees within a second of the capture ending — and reports which
+    of the three states it reached. Derived per-beat intervals still travel by their own road,
+    ``POST /v1/sessions``, which stays the only route that accepts them.
+
+    A BP-only check has no capture, so asking for one is refused rather than quietly recorded:
+    a bp_only session walked through the capture states would produce a history entry describing
+    a measurement that never happened.
+    """
+    stored, _episode = _load_session(session_id, principal, db)
+
+    if stored.mode is CheckMode.BP_ONLY:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="a bp_only check has no sensor capture",
+        )
+
+    if body.accepted:
+        return _advance(db, principal, stored, CheckSessionStatus.PROCESSING)
+
+    # Section 17: SIG-02 offers another attempt, SIG-03 does not. The ceiling is a clinical-flow
+    # threshold rather than an engineering constant, so it comes from config (invariant 10) and
+    # matches the count the handset is showing the patient.
+    if body.attempt_number >= settings.deviation.max_capture_attempts:
+        return _advance(db, principal, stored, CheckSessionStatus.FAILED_QUALITY)
+
+    return _advance(db, principal, stored, CheckSessionStatus.CAPTURE_PENDING)
+
+
+@router.post(
+    "/check-sessions/{session_id}/process",
+    response_model=CheckSessionStateOut,
+    summary="Move a check into processing",
+)
+def start_processing(
+    session_id: uuid.UUID, body: ProcessIn, db: DbDep, principal: PrincipalDep
+) -> CheckSessionStateOut:
+    """PROC-01 and PROC-02.
+
+    Carries nothing: whatever is being processed is already stored — the capture for a sensor
+    check, the confirmed cuff reading for a BP-only one. The route exists so the session's status
+    reflects where the patient actually is, which is what History reads back.
+    """
+    stored, _episode = _load_session(session_id, principal, db)
+    return _advance(db, principal, stored, CheckSessionStatus.PROCESSING)
+
+
+@router.post(
+    "/check-sessions/{session_id}/complete",
+    response_model=CheckSessionStateOut,
+    summary="Close a check",
+)
+def complete_session(
+    session_id: uuid.UUID, db: DbDep, principal: PrincipalDep
+) -> CheckSessionStateOut:
+    """The terminal transition. Stamps ``completed_at``.
+
+    The insight is deliberately **not** generated here. It is a pure function of rows that already
+    exist (``GET .../insight``), so computing and storing one at completion would create a second
+    copy free to drift from the facts it summarises.
+    """
+    stored, _episode = _load_session(session_id, principal, db)
+    return _advance(db, principal, stored, CheckSessionStatus.COMPLETED)

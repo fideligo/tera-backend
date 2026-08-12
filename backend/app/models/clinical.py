@@ -17,14 +17,34 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, RecordedAtMixin, SyntheticMixin, UuidPkMixin, utcnow
 from app.models.core import enum_column
 from app.models.enums import (
+    BpReferenceRefreshReason,
+    BpReferenceStatus,
     CheckMode,
     CheckSessionStatus,
     CuffSource,
     HypertensionStatus,
+    MedicationStatus,
     MedicationStatusToday,
     PregnancyAnswer,
     SexAtBirth,
 )
+
+#: The PHR's single-valued answers (migration 0011). Free strings in Python — the closed list is
+#: enforced by the database type and by the Pydantic schema — but the *column* must be declared as
+#: the native enum or every write is a type error.
+FAMILY_BP_HISTORY_VALUES = ("parent", "sibling", "both", "no", "not_sure")
+PHYSICAL_ACTIVITY_VALUES = ("rarely", "one_to_two_days", "three_to_four_days", "five_plus_days")
+SMOKING_STATUS_VALUES = ("never", "formerly", "currently")
+SLEEP_HOURS_VALUES = ("under_5", "five_to_six", "seven_to_eight", "nine_plus")
+STRESS_LEVEL_VALUES = ("low", "moderate", "high")
+ALCOHOL_FREQUENCY_VALUES = ("never", "occasionally", "weekly", "daily")
+PREGNANCY_HISTORY_VALUES = ("yes", "no", "not_sure", "not_applicable")
+
+
+def pg_enum(name: str, values: tuple[str, ...]) -> sa.Enum:
+    """An existing native Postgres enum, addressed by name, holding plain Python strings."""
+    return sa.Enum(*values, name=name, native_enum=True, create_type=False)
+
 
 # Plausibility ranges are given verbatim in BUILD_SPEC 4.1 and must exist at database level.
 # They mirror PlausibilitySettings; the config values are what the API rejects on, these are the
@@ -93,6 +113,60 @@ class CuffReading(UuidPkMixin, SyntheticMixin, RecordedAtMixin, Base):
     )
 
 
+class BpReference(UuidPkMixin, SyntheticMixin, Base):
+    """The cuff reading currently acting as a patient's personal baseline (section 28's
+    ``bp_references``).
+
+    **A pointer, not a copy.** The mmHg live in :class:`CuffReading` and nowhere else (invariant
+    1); this row says which reading is in force, from when, and why it replaced the last one.
+    Copying the numbers here would put pressure values in a second table and let the two disagree.
+
+    Supersession follows :class:`~app.models.device.Calibration` exactly, and for the same reason:
+    a partial unique index allows at most one ``active`` row per patient, and replacing a reference
+    inserts a new row and stamps ``deactivated_at`` on the old one rather than editing its
+    substance. Section 12's BPREF-04 and section 27's refresh rule both need to read *which
+    reference was in force when a given check ran*, which is only answerable if the history stays.
+    """
+
+    __tablename__ = "bp_reference"
+
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        sa.ForeignKey("patient.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    cuff_reading_id: Mapped[uuid.UUID] = mapped_column(
+        sa.ForeignKey("cuff_reading.id", ondelete="RESTRICT"), nullable=False
+    )
+    activated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    deactivated_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    refresh_reason: Mapped[BpReferenceRefreshReason] = mapped_column(
+        enum_column(BpReferenceRefreshReason, "bp_reference_refresh_reason"), nullable=False
+    )
+    status: Mapped[BpReferenceStatus] = mapped_column(
+        enum_column(BpReferenceStatus, "bp_reference_status"), nullable=False
+    )
+
+    __table_args__ = (
+        sa.Index(
+            "uq_bp_reference_one_active_per_patient",
+            "patient_id",
+            unique=True,
+            postgresql_where=sa.text("status = 'active'"),
+        ),
+        sa.CheckConstraint(
+            "(status = 'active') = (deactivated_at IS NULL)",
+            name="ck_bp_reference_active_iff_not_deactivated",
+        ),
+        sa.CheckConstraint(
+            "deactivated_at IS NULL OR deactivated_at >= activated_at",
+            name="ck_bp_reference_deactivated_after_activated",
+        ),
+    )
+
+
 class MedicationEvent(UuidPkMixin, SyntheticMixin, RecordedAtMixin, Base):
     """A medication-taken report.
 
@@ -109,6 +183,29 @@ class MedicationEvent(UuidPkMixin, SyntheticMixin, RecordedAtMixin, Base):
         sa.DateTime(timezone=True), nullable=False, index=True
     )
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+
+class Medication(UuidPkMixin, SyntheticMixin, Base):
+    __tablename__ = "medication"
+
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        sa.ForeignKey("patient.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    dose: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    frequency: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    started_at: Mapped[date | None] = mapped_column(sa.Date, nullable=True)
+    last_changed_at: Mapped[date | None] = mapped_column(sa.Date, nullable=True)
+    #: The DB column is the native ``medication_status`` enum, created by migration 0011. It was
+    #: declared here as a plain String, which reads back fine and breaks on every write and every
+    #: WHERE: Postgres has no ``medication_status = character varying`` operator, so
+    #: ``GET /v1/medications`` and ``POST /v1/medications`` both returned 500.
+    status: Mapped[MedicationStatus] = mapped_column(
+        enum_column(MedicationStatus, "medication_status"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
 
 class SymptomEvent(UuidPkMixin, SyntheticMixin, RecordedAtMixin, Base):
@@ -256,6 +353,33 @@ class PhrProfile(UuidPkMixin, SyntheticMixin, Base):
     conditions: Mapped[list[str]] = mapped_column(
         ARRAY(sa.String(64)), nullable=False, server_default=sa.text("'{}'::varchar[]"), default=list
     )
+
+    # Migration 0011 created all seven as native Postgres enums while declaring them String here.
+    # Same fault as ``Medication.status``: reads work, writes and comparisons do not. Bound to the
+    # existing types by name, with the value lists mirrored from the migration —
+    # ``test_phr_enum_columns_match_the_database`` holds the two together.
+    family_bp_history: Mapped[str | None] = mapped_column(
+        pg_enum("family_bp_history", FAMILY_BP_HISTORY_VALUES), nullable=True
+    )
+    physical_activity: Mapped[str | None] = mapped_column(
+        pg_enum("physical_activity_level", PHYSICAL_ACTIVITY_VALUES), nullable=True
+    )
+    smoking_status: Mapped[str | None] = mapped_column(
+        pg_enum("smoking_status", SMOKING_STATUS_VALUES), nullable=True
+    )
+    usual_sleep_hours: Mapped[str | None] = mapped_column(
+        pg_enum("usual_sleep_hours", SLEEP_HOURS_VALUES), nullable=True
+    )
+    usual_stress_level: Mapped[str | None] = mapped_column(
+        pg_enum("usual_stress_level", STRESS_LEVEL_VALUES), nullable=True
+    )
+    alcohol_frequency: Mapped[str | None] = mapped_column(
+        pg_enum("alcohol_frequency", ALCOHOL_FREQUENCY_VALUES), nullable=True
+    )
+    pregnancy_hypertension_history: Mapped[str | None] = mapped_column(
+        pg_enum("pregnancy_hypertension_history", PREGNANCY_HISTORY_VALUES), nullable=True
+    )
+    family_early_cardiac_history: Mapped[bool | None] = mapped_column(sa.Boolean, nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, default=utcnow

@@ -8,9 +8,11 @@ from app.models.auth import RefreshToken
 from app.models.ratelimit import RateLimitCounter
 from app.models.base import Base, SyntheticMixin, utcnow
 from app.models.clinical import (
+    BpReference,
     ClinicianSummary,
     CuffReading,
     CheckSession,
+    Medication,
     MedicationEvent,
     PatientContext,
     PhrProfile,
@@ -23,6 +25,8 @@ from app.models.core import AppUser, AuditLog, MonitoringEpisode, Patient
 from app.models.device import Calibration, CalibrationSourceSession, DeviceProfile
 from app.models.enums import (
     AuditAction,
+    BpReferenceRefreshReason,
+    BpReferenceStatus,
     CalibrationStatus,
     CameraHardwareLevel,
     CuffSource,
@@ -31,6 +35,7 @@ from app.models.enums import (
     CheckMode,
     CheckSessionStatus,
     HypertensionStatus,
+    MedicationStatus,
     MedicationStatusToday,
     Posture,
     PregnancyAnswer,
@@ -90,6 +95,11 @@ __all__ = [
     "DeviationState",
     "EventType",
     "MeasurementSession",
+    "BpReference",
+    "BpReferenceRefreshReason",
+    "BpReferenceStatus",
+    "Medication",
+    "MedicationStatus",
     "MedicationEvent",
     "MonitoringEpisode",
     "Patient",

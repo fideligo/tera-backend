@@ -12,6 +12,7 @@ from app.models.enums import (
     CheckMode,
     CheckSessionStatus,
     HypertensionStatus,
+    MedicationStatus,
     MedicationStatusToday,
     SexAtBirth,
 )
@@ -63,6 +64,16 @@ class PhrProfilePatch(TeraModel):
     taking_bp_medication: bool | None = None
     conditions: list[str] | None = Field(default=None, max_length=len(CONDITION_CODES))
 
+    family_bp_history: str | None = None
+    physical_activity: str | None = None
+    smoking_status: str | None = None
+    usual_sleep_hours: str | None = None
+    usual_stress_level: str | None = None
+    alcohol_frequency: str | None = None
+    pregnancy_hypertension_history: str | None = None
+    family_early_cardiac_history: bool | None = None
+    medications: list[dict[str, Any]] | None = None
+
     @model_validator(mode="after")
     def _check(self) -> "PhrProfilePatch":
         if self.date_of_birth is not None and self.date_of_birth > date.today():
@@ -93,6 +104,15 @@ class PhrProfileOut(SyntheticFlag, TeraModel):
     hypertension_status: HypertensionStatus | None
     taking_bp_medication: bool | None
     conditions: list[str]
+    family_bp_history: str | None
+    physical_activity: str | None
+    smoking_status: str | None
+    usual_sleep_hours: str | None
+    usual_stress_level: str | None
+    alcohol_frequency: str | None
+    pregnancy_hypertension_history: str | None
+    family_early_cardiac_history: bool | None
+    medications: list[dict[str, Any]] | None
     updated_at: datetime
 
 
@@ -184,3 +204,132 @@ class PreconditionOut(SyntheticFlag, TeraModel):
     recent_nicotine_30_min: bool
     needs_restroom: bool
     is_ready: bool
+
+
+# --------------------------------------------------------------------------- medications
+#
+# Section 28 models medications as their own table because they are a *list* that changes over
+# time, unlike the single-valued lifestyle answers folded into the profile.
+
+
+class MedicationIn(TeraModel):
+    """`POST /v1/medications` — PROF-04.
+
+    ``status`` is not accepted on create: a medication you are adding is one you are taking. It
+    changes through the stop route, which is the only transition that exists.
+    """
+
+    name: str = Field(min_length=1, max_length=128)
+    dose: str = Field(min_length=1, max_length=64)
+    frequency: str = Field(min_length=1, max_length=64)
+    started_at: date | None = None
+
+    @model_validator(mode="after")
+    def _not_future(self) -> "MedicationIn":
+        if self.started_at is not None and self.started_at > date.today():
+            raise ValueError("started_at cannot be in the future")
+        return self
+
+
+class MedicationUpdate(TeraModel):
+    """`POST /v1/medications/{id}` — a correction, field by field.
+
+    A mistyped dose is a correction to what someone is taking now, not a new fact about a
+    different moment, which is why `medication` is mutable where the clinical tables are not.
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    dose: str | None = Field(default=None, min_length=1, max_length=64)
+    frequency: str | None = Field(default=None, min_length=1, max_length=64)
+    started_at: date | None = None
+
+
+class MedicationOut(SyntheticFlag, TeraModel):
+    id: uuid.UUID
+    name: str
+    dose: str
+    frequency: str
+    started_at: date | None
+    last_changed_at: date | None
+    status: MedicationStatus
+
+
+# --------------------------------------------------------------------------- conditions
+
+
+class ConditionsIn(TeraModel):
+    """`PUT /v1/conditions` in the spec, POST here — the whole list, not a delta.
+
+    Replacing wholesale is what the screen does: PROF-03 is a checklist, and a patient unticking
+    something has to be able to say so. A delta API cannot express a removal without a second verb.
+    """
+
+    conditions: list[str] = Field(default_factory=list, max_length=len(CONDITION_CODES))
+
+    @model_validator(mode="after")
+    def _known(self) -> "ConditionsIn":
+        unknown = sorted(set(self.conditions) - CONDITION_CODES)
+        if unknown:
+            raise ValueError(
+                f"unknown condition code(s): {', '.join(unknown)}. "
+                f"Allowed: {', '.join(sorted(CONDITION_CODES))}"
+            )
+        return self
+
+
+class ConditionsOut(TeraModel):
+    conditions: list[str]
+    updated_at: datetime
+
+
+class ProfileCompletionOut(TeraModel):
+    """`GET /v1/profile/completion` — what PROF-01 renders as a progress meter.
+
+    A count of sections answered, and **nothing derived from the answers themselves**. It says
+    whether a field is filled, never whether the value in it is good or bad: invariant 6, and the
+    spec's own instruction not to judge a patient by their BMI.
+    """
+
+    complete: bool
+    completed_sections: list[str]
+    missing_sections: list[str]
+    percent: int = Field(ge=0, le=100)
+
+
+# --------------------------------------------------------------------------- check session
+
+
+class CaptureIn(TeraModel):
+    """`POST /v1/check-sessions/{id}/capture` — the quality-gate outcome for one attempt.
+
+    **No waveform, by construction** (invariant 2). The handset has already run its own gate and
+    reports what happened: accepted, retry, or out of attempts. There is no field here that could
+    carry a sample buffer, and `measurement_session` remains the only route by which a derived
+    per-beat interval enters the system.
+    """
+
+    accepted: bool
+    attempt_number: int = Field(ge=1, le=10)
+    reason: str | None = Field(default=None, max_length=64)
+
+
+class ProcessIn(TeraModel):
+    """`POST /v1/check-sessions/{id}/process` — move a session into processing.
+
+    Carries nothing. What is being processed is already stored: the capture for a sensor check,
+    the confirmed cuff reading for a BP-only one.
+    """
+
+
+class CheckSessionStateOut(SyntheticFlag, TeraModel):
+    """A session and where the section 31 state machine now has it."""
+
+    id: uuid.UUID
+    episode_id: uuid.UUID
+    mode: CheckMode
+    status: CheckSessionStatus
+    started_at: datetime
+    completed_at: datetime | None
+    #: Populated when a transition was refused, so a client can say why rather than showing a bare
+    #: 409. Null on success.
+    refused_reason: str | None = None
