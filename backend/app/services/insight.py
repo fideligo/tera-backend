@@ -55,6 +55,8 @@ class PriorityAction(str, Enum):
     CONFIRM_WITH_CUFF = "confirm_with_cuff"
     FOLLOW_UP_PATHWAY = "follow_up_pathway"
     SET_BP_REFERENCE = "set_bp_reference"
+    PREVENTIVE_RECOMMENDATION = "preventive_recommendation"
+    PERSONALIZED_INTERVENTION = "personalized_intervention"
 
 
 #: Section 24's threshold, and the only number in this file. It is a *monitoring* threshold used to
@@ -212,43 +214,41 @@ def _evaluate_sensor(f: InsightFeatures, context: list[str]) -> Insight:
     """
     comparable = f.hr_near_resting and f.precondition_standard
     above_reference = _above_threshold(f.reference_systolic, f.reference_diastolic)
+    confirmed_above = _above_threshold(f.confirmed_systolic, f.confirmed_diastolic)
 
-    # A persistent change with a *fresh* cuff reading is the strongest row in the table.
-    confirmed = _above_threshold(f.confirmed_systolic, f.confirmed_diastolic)
-    if f.deviation_state is DeviationState.PERSISTENT and confirmed is not None:
+    # BP cuff >= 140/90 -> actual BP is primary concern; direct to medical follow-up (InaSH rules).
+    if confirmed_above or (confirmed_above is None and above_reference):
         return Insight(
-            result_state=ResultState.PERSISTENT_CHANGE,
-            priority_action_code=(
-                PriorityAction.FOLLOW_UP_PATHWAY if confirmed else PriorityAction.CONTINUE_MONITORING
-            ),
+            result_state=ResultState.BP_ABOVE_THRESHOLD,
+            priority_action_code=PriorityAction.FOLLOW_UP_PATHWAY,
             context_codes=context,
-            reference_systolic=f.confirmed_systolic,
-            reference_diastolic=f.confirmed_diastolic,
+            reference_systolic=f.confirmed_systolic if confirmed_above is not None else f.reference_systolic,
+            reference_diastolic=f.confirmed_diastolic if confirmed_above is not None else f.reference_diastolic,
         )
 
     if f.deviation_state is DeviationState.PERSISTENT:
+        has_lifestyle = f.sleep_less_than_usual or f.stress_higher_than_usual or f.medication_status == MedicationStatusToday.MISSED_OR_LATE
+        if has_lifestyle:
+            action = PriorityAction.PERSONALIZED_INTERVENTION
+        elif comparable:
+            action = PriorityAction.CONFIRM_WITH_CUFF
+        else:
+            action = PriorityAction.STANDARDIZE_AND_REPEAT
+        
         return Insight(
             result_state=ResultState.PERSISTENT_CHANGE,
-            # "Need cleaner measurement before strong interpretation" when the check was not
-            # comparable; otherwise confirm against a cuff, which is the only thing that can
-            # turn a trend into a pressure.
-            priority_action_code=(
-                PriorityAction.CONFIRM_WITH_CUFF
-                if comparable
-                else PriorityAction.STANDARDIZE_AND_REPEAT
-            ),
+            priority_action_code=action,
             context_codes=context,
             reference_systolic=f.reference_systolic,
             reference_diastolic=f.reference_diastolic,
         )
 
     if f.trend_direction is not None and f.trend_direction is not TrendDirection.STABLE:
-        if not f.hr_near_resting:
+        if not f.hr_near_resting or not f.precondition_standard:
             action = PriorityAction.REST_AND_REPEAT
-        elif not f.precondition_standard:
-            action = PriorityAction.STANDARDIZE_AND_REPEAT
         else:
             action = PriorityAction.REPEAT_LATER
+            
         return Insight(
             result_state=ResultState.SINGLE_CHANGE,
             priority_action_code=action,
@@ -257,14 +257,11 @@ def _evaluate_sensor(f: InsightFeatures, context: list[str]) -> Insight:
             reference_diastolic=f.reference_diastolic,
         )
 
-    # Stable. The reference still matters: a stable trend above 140/90 is a stable trend above
-    # 140/90, and the matrix keeps monitoring rather than reassuring.
+    # Stable -> reassurance + continue monitoring + preventive recommendation.
     return Insight(
         result_state=ResultState.WITHIN_PATTERN,
-        priority_action_code=(
-            PriorityAction.CONTINUE_MONITORING if not above_reference else PriorityAction.CONTINUE_MONITORING
-        ),
-        context_codes=context + (["reference_above_threshold"] if above_reference else []),
+        priority_action_code=PriorityAction.PREVENTIVE_RECOMMENDATION,
+        context_codes=context,
         reference_systolic=f.reference_systolic,
         reference_diastolic=f.reference_diastolic,
     )

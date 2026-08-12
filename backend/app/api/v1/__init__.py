@@ -22,12 +22,14 @@ from app.api.v1 import (
     phr,
     reference,
     sessions,
+    check_sessions,
 )
 
 api_router = APIRouter(prefix="/v1")
 api_router.include_router(auth.router)
 api_router.include_router(device_profiles.router)
 api_router.include_router(sessions.router)
+api_router.include_router(check_sessions.router)
 api_router.include_router(cuff_readings.router)
 api_router.include_router(patient_context.router)
 api_router.include_router(phr.router)
