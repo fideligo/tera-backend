@@ -108,6 +108,23 @@ def submit_eligibility(
     db.add(profile)
     db.flush()
 
+    from app.models.recommended import Device as B2CDevice, User
+    user = db.execute(select(User).where(User.email == principal.subject)).scalar_one_or_none()
+    if user:
+        b2c_device = B2CDevice(
+            user_id=user.id,
+            platform="unknown",
+            model=body.model,
+            os_version=body.os_version,
+            app_version="unknown",
+            eligibility_status="eligible" if verdict.status in _ELIGIBLE_BANDS else "not_eligible",
+            camera_supported=body.camera_fps > 0,
+            flash_supported=body.camera_fps > 0,
+            accelerometer_supported=body.accel_rate_hz > 0
+        )
+        db.add(b2c_device)
+        db.flush()
+
     audit.record(
         db, principal=principal, action=AuditAction.DEVICE_PROFILE_SUBMITTED, target=profile.id
     )
