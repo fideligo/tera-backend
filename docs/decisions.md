@@ -1537,3 +1537,20 @@ catch, and it did. Removed from both the model and migration `0013` before it sh
 Full suite: 350 passing. The 7 remaining failures are pre-existing, in `test_insight_engine.py`,
 against the uncommitted rewrite of `insight.py` already documented earlier in this file — untouched
 by any of the above.
+
+**The consent-gated LLM paragraph now also reads the EMR profile, not just the per-check
+context.** The hackathon UX pass's Task 3 asked for this explicitly: "This EMR data is strictly
+required for the LLM insight generation." `read_insight`'s new `_emr_context(db, patient_id)`
+loads `PhrProfile` and hands `generate_commentary` a compact dict — **age in years, never date of
+birth**, plus sex, height, weight, self-reported hypertension status, medication status and
+condition codes — only when `ai_consent=true`, same as everything else this endpoint sends
+externally. Age rather than DOB is a deliberate narrowing beyond what was asked: a specific
+birthdate is one of the more re-identifying fields a person has, and the paragraph this feeds has
+no use for a birthdate that an age in years does not already serve. No name, no patient id, no raw
+signal, no mmHg — all four already excluded by the existing `generate_commentary` docstring and
+still true. `_build_user_prompt` gained a second optional block, `emr`, printed only when present,
+so a patient with no profile row (never onboarded past ONB-02, or using BP-only) still gets a
+prompt — just a shorter one. `test_phr_and_context_api.py` still passes unchanged (30/30); no test
+in the suite yet exercises `_emr_context` or the LLM path at all, which was already true before
+this change and is recorded as a gap rather than fixed here — the LLM call itself needs a network
+double to test properly and that was out of scope for this pass.

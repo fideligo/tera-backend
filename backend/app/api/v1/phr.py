@@ -442,6 +442,44 @@ def _build_features(
     )
 
 
+def _emr_context(db: DbDep, patient_id: uuid.UUID) -> dict | None:
+    """A compact, de-identified profile summary for the LLM prompt.
+
+    Age rather than date of birth, and nothing else that could pick this patient out of a crowd —
+    see the module-level note in `services/llm_insight.py`. Returns `None` when the patient has no
+    profile row yet, which the caller then omits from the prompt entirely rather than sending an
+    empty object.
+    """
+    row = db.execute(
+        select(PhrProfile).where(PhrProfile.patient_id == patient_id)
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+
+    age = None
+    if row.date_of_birth is not None:
+        today = datetime.now(timezone.utc).date()
+        dob = row.date_of_birth
+        age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+
+    out: dict = {}
+    if age is not None:
+        out["age_years"] = age
+    if row.sex_assigned_at_birth is not None:
+        out["sex"] = row.sex_assigned_at_birth.value
+    if row.height_cm is not None:
+        out["height_cm"] = row.height_cm
+    if row.weight_kg is not None:
+        out["weight_kg"] = row.weight_kg
+    if row.hypertension_status is not None:
+        out["hypertension_status"] = row.hypertension_status.value
+    if row.taking_bp_medication is not None:
+        out["taking_bp_medication"] = row.taking_bp_medication
+    if row.conditions:
+        out["conditions"] = list(row.conditions)
+    return out or None
+
+
 def _render(insight: Insight) -> dict:
     """Apply the language layer. Decision and wording stay separable."""
     return {
@@ -499,6 +537,7 @@ def read_insight(
         ai_commentary = llm_insight.generate_commentary(
             insight=rendered,
             context=None if context is None else _context_out(context).as_features(),
+            emr=_emr_context(db, episode.patient_id),
             settings=settings.llm_insight,
         )
 

@@ -43,6 +43,17 @@ record but no estimate could responsibly be produced from it.
 |---|---|
 | `200` | Successful Response |
 
+### `POST /v1/auth/login`
+
+**Login using JSON body (B2C)**
+
+Request body: `LoginRequestJson`
+
+| Response | Description |
+|---|---|
+| `200` | Successful Response |
+| `422` | Validation Error |
+
 ### `POST /v1/auth/logout`
 
 **End a session by revoking its refresh token**
@@ -347,9 +358,15 @@ An insight is a function of rows that already exist, so recomputing it cannot dr
 — and there is no second copy to keep in step. The rule engine is pure; every read of the same
 session returns the same verdict.
 
+`ai_consent` adds exactly one field, `ai_commentary`, and touches nothing else in this
+response. Declined, unconfigured, or the call itself failing are the same outcome: the field
+is `None` and everything above it is identical to a plain read. See `services/llm_insight.py`
+for what "identical" is enforced by.
+
 | Parameter | In | Required |
 |---|---|---|
 | `session_id` | path | yes |
+| `ai_consent` | query | no |
 
 | Response | Description |
 |---|---|
@@ -1265,6 +1282,13 @@ numbers for the same reason: a confirmed cuff reading is labelled as one whereve
 ### `HypertensionStatus`
 
 PM spec ONB-03. Reported by the patient, never inferred.
+
+### `LoginRequestJson`
+
+| Field | Type | Required |
+|---|---|---|
+| `subject` | string | yes |
+| `password` | string | yes |
 
 ### `LogoutRequest`
 

@@ -17,10 +17,12 @@ insight is what they read either way.
 
 # What is sent
 
-The rendered deterministic insight only — codes, wording, direction, a magnitude in baseline
-standard deviations, the context flags already collected for CTX-01. No mmHg (invariant 1: the
-schema this is built from has no pressure field), no raw signal (invariant 2: the deterministic
-engine never receives one either), no name, no subject.
+The rendered deterministic insight, the context flags already collected for CTX-01, and — with
+the same consent — a compact summary of the patient's PHR profile (age in years, sex, height,
+weight, self-reported hypertension status, medication status, condition codes). No mmHg
+(invariant 1: the schema this is built from has no pressure field), no raw signal (invariant 2:
+the deterministic engine never receives one either), no name, no date of birth (age only, so nine
+distinct patients cannot be told apart by it), no subject identifier of any kind.
 """
 
 from __future__ import annotations
@@ -50,7 +52,7 @@ _SYSTEM_PROMPT = (
 )
 
 
-def _build_user_prompt(insight: dict, context: dict | None) -> str:
+def _build_user_prompt(insight: dict, context: dict | None, emr: dict | None) -> str:
     lines = [
         f"Result category: {insight.get('result_state', 'unknown')}",
         f"Priority action: {insight.get('priority_action_code', 'unknown')}",
@@ -58,11 +60,19 @@ def _build_user_prompt(insight: dict, context: dict | None) -> str:
     ]
     if context:
         lines.append(f"Context reported for this check: {context}")
+    if emr:
+        # Age only, never date of birth — see the module docstring. Absent fields (profile never
+        # completed, or a field the patient skipped) are simply not keys here, not sent as null.
+        lines.append(f"Patient profile on file: {emr}")
     return "\n".join(lines)
 
 
 def generate_commentary(
-    *, insight: dict, context: dict | None, settings: LlmInsightSettings
+    *,
+    insight: dict,
+    context: dict | None,
+    emr: dict | None = None,
+    settings: LlmInsightSettings,
 ) -> str | None:
     """Return a guarded paragraph, or `None` if unconfigured, unreachable, or refused by the
     deny-list filter. Never raises — a broken third-party API must not break the check.
@@ -81,7 +91,7 @@ def generate_commentary(
                 "model": settings.model,
                 "messages": [
                     {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": _build_user_prompt(insight, context)},
+                    {"role": "user", "content": _build_user_prompt(insight, context, emr)},
                 ],
                 "temperature": 0.3,
                 "max_tokens": 220,
