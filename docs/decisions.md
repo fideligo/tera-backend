@@ -1413,3 +1413,73 @@ model was not brought with it:
 All three are fixed. The last one now builds from `PhrProfileOut.model_fields` so the next column
 cannot reintroduce it. The lesson worth keeping: a migration that has not served a request has not
 been tested, and `pytest` did not catch any of the three because no test touched those columns.
+
+## The backend could not start, and the fix was three separate collisions
+
+Found by running the suite, not by reading: `app/models/recommended.py` (untracked, from a parallel
+session) declares PM spec section 28's table list verbatim alongside the existing schema. Three
+things were wrong with it at once, each hidden behind the one before.
+
+**1. Duplicate table name — the app would not import.** `recommended.py` and `clinical.py` both
+claimed `session_context`. SQLAlchemy raises on that at import, so `docker compose up` could not
+boot and `pytest` collected zero tests. Renamed to `session_context_b2c`: the two are genuinely
+different records (the clinical one is append-only with a `synthetic` flag and an episode behind
+it), and merging them is a schema decision rather than an import fix.
+
+**2. Duplicate class name — the app booted and then 500ed.** Both files defined `PhrProfile`.
+SQLAlchemy's declarative registry cannot resolve the string `"PhrProfile"` in a relationship when
+two classes answer to it, so this one raised on the first request that touched a mapper rather
+than at import. Renamed to `PhrProfileB2C`, matching the `…B2C` suffix the rest of that file uses.
+
+**3. No migration — sixteen tables existed in code and in no database.** `profile.py`,
+`check_sessions.py`, `device.py` and the dual-write in `auth.py` all query them, and the mobile app
+had already been switched to call those routes. Every one was a 500 waiting for its first request.
+Migration `0013_b2c_section_28` creates them; verified by round-tripping down and back up.
+
+`app/models/__init__.py` now imports `recommended` for its side effect. Without that the classes
+never reach `Base.metadata`, which is exactly how sixteen tables came to be queried by live
+endpoints while existing in no migration — autogenerate could not see them to complain.
+
+### One unconditional INSERT cost 234 tests
+
+The B2C dual-write in `register_patient` inserted into `users` with no duplicate check, and
+`users.email` is UNIQUE. A second registration for an address that already had a `users` row
+raised `UniqueViolation` — which aborts the surrounding transaction, so **every test that ran
+afterwards errored in setup**. The suite read 95 passed / 245 errors and looked like a catastrophe;
+it was one missing `SELECT`.
+
+Now get-or-create. The duplicate-subject check earlier in the endpoint already owns the "this
+account exists" answer for `app_user`, and this half must not contradict it by raising. Suite went
+from 95 passing to 330.
+
+**A note on reading a red suite.** Two of the runs in this session were contaminated by my own
+leftovers: a killed `pytest` left `tera_test` behind with live connections, so the fixture could
+not drop it and everything errored at setup. If the whole suite errors, check for a stale test
+database and stray python processes before believing the diagnosis.
+
+### Still open, and needing a decision this side of the deadline
+
+**Two implementations of the same endpoints, and the new one wins by registration order.**
+`check_sessions.py` and `profile.py` duplicate routes that `phr.py` already serves —
+`POST /v1/check-sessions`, `.../preconditions`, `.../context`, `.../insight`, `/profile`. FastAPI
+resolves duplicates by registration order and `check_sessions.router` is included first, so the new
+ones shadow the working ones. That is what the remaining 16 failures and 11 errors in
+`test_phr_and_context_api.py` are: tests written against routes that are no longer reachable.
+
+**The mobile client and the new backend do not agree on the contract:**
+
+| | mobile sends | new backend expects |
+|---|---|---|
+| `POST /v1/check-sessions` | `{episode_id, mode}`, reads `id` | `{mode, device_id}`, returns `session_id` |
+| `PATCH .../preconditions` | five booleans | five booleans **plus a required `status`** |
+
+Both mismatches are a 422, so the check flow cannot open a session against the new endpoints today.
+
+**The new routes are PATCH.** Invariant 5 is enforced by a test that walks the OpenAPI schema and
+refuses every PUT, PATCH and DELETE. That test will fail as soon as the shadowing is resolved in
+the new routes' favour. Per this repo's own rule — an apparent conflict with an invariant is a
+stop-and-ask, not something to reconcile quietly — that one is left for the team.
+
+The cheapest resolution is probably to drop the duplicate routes and point the mobile client back
+at the existing POST endpoints, which are tested and whose tables have triggers and audit behind
+them. That is a call for whoever owns the B2C direction, not a cleanup to do silently.

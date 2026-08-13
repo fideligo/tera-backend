@@ -22,6 +22,12 @@ from app.models.clinical import (
     SymptomEvent,
 )
 from app.models.core import AppUser, AuditLog, MonitoringEpisode, Patient
+
+# The B2C schema (PM spec section 28, verbatim table names). Imported for its side effect:
+# without it the classes never reach `Base.metadata`, so Alembic autogenerate cannot see them —
+# which is how sixteen tables came to be queried by live endpoints while existing in no
+# migration and therefore in no database.
+from app.models import recommended  # noqa: F401
 from app.models.device import Calibration, CalibrationSourceSession, DeviceProfile
 from app.models.enums import (
     AuditAction,

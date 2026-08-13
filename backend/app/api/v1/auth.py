@@ -407,8 +407,6 @@ def register_patient(
 
     now = datetime.now(tz=timezone.utc)
 
-    # A pseudonym, not an identifier derived from the subject. BUILD_SPEC 4.1 has nowhere to put
-    # a name, and deriving the pseudonym from an email address would put one there sideways.
     patient = Patient(
         pseudonym=f"TERA-{uuid.uuid4().hex[:12].upper()}",
         clinic_id=None,
@@ -428,6 +426,29 @@ def register_patient(
     )
     db.add(user)
     db.flush()
+
+    # The B2C mirror of the account. `users.email` is UNIQUE, and this was an unconditional
+    # INSERT: a second registration for an address that already had a `users` row raised
+    # UniqueViolation, which aborts the surrounding transaction rather than returning a 409.
+    #
+    # In the suite that was not one failure but 245 — the poisoned transaction took down every
+    # test that ran after it, which is why the whole backend suite looked broken.
+    #
+    # Get-or-create. The duplicate-subject check above already owns the "this account exists"
+    # answer for `app_user`; this half must not contradict it by raising on its own.
+    from app.models.recommended import User as RecommendedUser
+
+    b2c_user = db.execute(
+        select(RecommendedUser).where(RecommendedUser.email == body.subject)
+    ).scalar_one_or_none()
+    if b2c_user is None:
+        b2c_user = RecommendedUser(
+            email=body.subject,
+            password_hash=hash_password(body.password),
+            onboarding_complete=False,
+        )
+        db.add(b2c_user)
+        db.flush()
 
     episode = MonitoringEpisode(
         patient_id=patient.id,
@@ -570,3 +591,29 @@ def _mint(
         expires_in=settings.security.access_token_ttl_minutes * 60,
         role=principal.role,
     )
+
+from pydantic import BaseModel
+class LoginRequestJson(BaseModel):
+    subject: str
+    password: str
+
+@router.post("/login", response_model=TokenResponse, summary="Login using JSON body (B2C)")
+def login_b2c(body: LoginRequestJson, request: Request, db: DbDep, settings: SettingsDep) -> TokenResponse:
+    user = db.execute(select(AppUser).where(AppUser.subject == body.subject)).scalar_one_or_none()
+    if user is None or not verify_password(body.password, user.password_hash):
+        audit.record_unauthenticated(db, actor=body.subject, action=AuditAction.AUTH_LOGIN_FAILED)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="incorrect username or password",
+        )
+    principal = _principal_for(user)
+    issued = refresh_token_service.issue(
+        db,
+        user_id=user.id,
+        expires_at=datetime.now(tz=timezone.utc) + timedelta(days=settings.security.refresh_token_ttl_days),
+    )
+    tokens = _mint(principal, settings, refresh_jti=issued.jti)
+    audit.record(db, principal=principal, action=AuditAction.AUTH_TOKEN_ISSUED, target=user.id)
+    db.commit()
+    return tokens
