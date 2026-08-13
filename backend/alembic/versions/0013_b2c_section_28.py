@@ -183,8 +183,6 @@ def upgrade() -> None:
     )
     op.create_table('sensor_measurements',
     sa.Column('session_id', sa.Uuid(), nullable=False),
-    sa.Column('raw_scg_storage_ref', sa.String(), nullable=True),
-    sa.Column('raw_ppg_storage_ref', sa.String(), nullable=True),
     sa.Column('ptt_ms', sa.Float(), nullable=True),
     sa.Column('heart_rate_bpm', sa.Integer(), nullable=True),
     sa.Column('capture_duration', sa.Integer(), nullable=True),

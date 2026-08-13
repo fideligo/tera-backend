@@ -1483,3 +1483,57 @@ stop-and-ask, not something to reconcile quietly — that one is left for the te
 The cheapest resolution is probably to drop the duplicate routes and point the mobile client back
 at the existing POST endpoints, which are tested and whose tables have triggers and audit behind
 them. That is a call for whoever owns the B2C direction, not a cleanup to do silently.
+
+## The main flow (recording → derive → submit → insight) was broken end to end; fixed and LLM-gated
+
+User redirect mid-session: focus on the core recording flow (accelerometer + camera/flash, 60s
+capture, on-device derivation, then a consent-gated LLM paragraph) over the earlier phase list.
+Tracing that flow against the live API surfaced three real breaks, none of them in the mobile
+capture code itself (camera+flash+accelerometer access, the 60s window and the on-device PTT
+derivation in `signal_pipeline.dart` were all already real and correct):
+
+**`check_sessions.py` shadowed `phr.py` and was internally split-brained.** Registered ahead of
+`phr.router`, it intercepted `POST /check-sessions`, `PATCH .../preconditions`, `PATCH .../context`
+and `GET .../insight` — the entire spine of the check flow. Three of its four handlers wrote to
+the *old* schema (`clinical.CheckSession`/`SessionContext`/`Precondition`) while its session-open
+handler wrote to the B2C one (`CheckSessionB2C`), so a session opened through it had nowhere valid
+to attach preconditions or context. Its insight handler read `InsightB2C`, a table nothing ever
+writes to, so it 404'd unconditionally. Unregistered rather than merged — it isn't a smaller
+alternative worth preserving, it's broken against itself. `phr.py`'s tested implementation is now
+what actually runs; `test_phr_and_context_api.py` went from 16 failed + 11 errors to 30 passed with
+no code changes to phr.py itself.
+
+**The mobile client used PATCH against routes that are POST.** `check_session_client.dart`'s
+`submitPreconditions` and `current_context_submitter.dart`'s context submission both called
+`patchJson`; the routes that matter (`phr.py`'s) are POST — these rows are append-only (invariant
+5), the verb inserts. Fixed both call sites.
+
+**The insight screen read fields the response has never had.** `hero_result` and
+`what_this_means` — the response has `hero` and no single "what this means" string at all.
+`hero_result` always fell back to its placeholder text, so the result of every completed check
+displayed as "No result." Fixed to read `hero`, and "What this means" now composes from
+`context_chips` + `context_disclaimer` + `notice`, which the response actually returns.
+
+**`profile.py`'s PATCH was live and tripped invariant 5's route guard.** Unregistered for the same
+reason as `check_sessions.py`; the tested `POST /v1/profile` in `phr.py` already covers everything
+it did, including a condition-list PATCH-handler improvement made to `profile.py` in the same pass
+before the decision to drop it. `phr_submitter.dart` now calls `postJson` against the tested route;
+its payload no longer sends `postpartum`/`postpartum_date`/`rhythm_answer`, which the tested
+schema's `extra="forbid"` would have 422'd on every onboarding submission that set any of the
+three.
+
+**The Phase 4 LLM step**, gated the way the redirect described: `GET .../insight?ai_consent=true`
+adds one field, `ai_commentary`, computed by `app/services/llm_insight.py` — off with no key
+configured (`TERA_LLM_API_KEY` unset), and every failure mode (unconfigured, unreachable, or its
+output tripping `language.find_forbidden_language`, invariant 6's deny-list) resolves to the same
+`null`. The mobile `InsightScreen` asks consent once the deterministic result is already on
+screen; declining or any of the above leaves that screen exactly as it already was.
+
+**Also found and fixed while regenerating the migration for the above:** `SensorMeasurementB2C`
+declared `raw_scg_storage_ref` / `raw_ppg_storage_ref` columns — unwritten by any code path, but a
+column named "raw ... storage ref" is what `test_no_waveform_columns_in_the_schema` exists to
+catch, and it did. Removed from both the model and migration `0013` before it shipped anywhere.
+
+Full suite: 350 passing. The 7 remaining failures are pre-existing, in `test_insight_engine.py`,
+against the uncommitted rewrite of `insight.py` already documented earlier in this file — untouched
+by any of the above.

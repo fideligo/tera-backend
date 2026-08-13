@@ -179,8 +179,13 @@ class SensorMeasurementB2C(UuidPkMixin, Base):
     __tablename__ = "sensor_measurements"
     
     session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("check_sessions.id"), nullable=False)
-    raw_scg_storage_ref: Mapped[str | None] = mapped_column(String, nullable=True)
-    raw_ppg_storage_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    # No `raw_scg_storage_ref` / `raw_ppg_storage_ref` here, on purpose. Section 28 names them,
+    # and invariant 2 forbids them regardless of the spec: "the deepest granularity the API
+    # accepts is one derived interval per beat." A column named "raw ... storage ref" is a
+    # structural invitation to store one even while unwritten, and a dedicated test
+    # (`test_no_waveform_columns_in_the_schema`) walks every table specifically to catch this
+    # shape of column name. `ptt_ms` below is the derived value the spec and the invariant agree
+    # on.
     ptt_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     heart_rate_bpm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     capture_duration: Mapped[int | None] = mapped_column(Integer, nullable=True)

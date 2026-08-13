@@ -351,6 +351,36 @@ class RhythmModelSettings(BaseSettings):
     fallback_op_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
+class LlmInsightSettings(BaseSettings):
+    """The optional LLM-generated commentary offered alongside the deterministic insight.
+
+    **Off by default, and consent-gated even when configured.** The rule engine in
+    `app/services/insight.py` is the insight — deterministic, tested, invariant-covered, and
+    unaffected by anything in this class. This is a second, clearly-labelled paragraph a patient
+    may ask for and may decline; declining, or leaving it unconfigured, changes nothing about the
+    response the deterministic engine already returns.
+
+    Nothing here relaxes invariant 6. Every string this produces is checked against
+    `language.find_forbidden_language` before it reaches a response; a hit is discarded, not
+    edited, because a filter that "fixes" clinical language is a second, unreviewed source of
+    clinical language.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="TERA_LLM_")
+
+    #: No key, no calls — `enabled` is computed, not a second flag to forget to flip.
+    api_key: str | None = None
+    api_url: str = "https://integrate.api.nvidia.com/v1/chat/completions"
+    model: str = "meta/llama-3.1-8b-instruct"
+    #: Generous enough for a real API round trip, short enough that a hung provider does not
+    #: leave a patient staring at PROC-01 for the rest of the demo.
+    timeout_seconds: float = 12.0
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.api_key)
+
+
 class Settings(BaseSettings):
     """Top-level application settings."""
 
@@ -379,6 +409,7 @@ class Settings(BaseSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     reference: ReferenceSettings = Field(default_factory=ReferenceSettings)
     rhythm_model: RhythmModelSettings = Field(default_factory=RhythmModelSettings)
+    llm_insight: LlmInsightSettings = Field(default_factory=LlmInsightSettings)
 
 
 @lru_cache(maxsize=1)

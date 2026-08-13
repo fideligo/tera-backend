@@ -56,7 +56,7 @@ from app.schemas.phr import (
     SessionContextOut,
     SessionContextPatch,
 )
-from app.services import audit, contraindication, language
+from app.services import audit, contraindication, language, llm_insight
 from app.services.insight import Insight, InsightFeatures, evaluate
 
 router = APIRouter(tags=["phr"])
@@ -462,12 +462,23 @@ def _render(insight: Insight) -> dict:
     "/check-sessions/{session_id}/insight",
     summary="The deterministic insight for a check",
 )
-def read_insight(session_id: uuid.UUID, db: DbDep, principal: PrincipalDep) -> dict:
+def read_insight(
+    session_id: uuid.UUID,
+    db: DbDep,
+    principal: PrincipalDep,
+    settings: SettingsDep,
+    ai_consent: bool = False,
+) -> dict:
     """Computed on read, stored nowhere.
 
     An insight is a function of rows that already exist, so recomputing it cannot drift from them
     — and there is no second copy to keep in step. The rule engine is pure; every read of the same
     session returns the same verdict.
+
+    `ai_consent` adds exactly one field, `ai_commentary`, and touches nothing else in this
+    response. Declined, unconfigured, or the call itself failing are the same outcome: the field
+    is `None` and everything above it is identical to a plain read. See `services/llm_insight.py`
+    for what "identical" is enforced by.
     """
     stored, episode = _load_session(session_id, principal, db)
 
@@ -481,12 +492,22 @@ def read_insight(session_id: uuid.UUID, db: DbDep, principal: PrincipalDep) -> d
     context = _latest_context(db, stored.id)
     precondition = _latest_precondition(db, stored.id)
     insight = evaluate(_build_features(db, stored, context, precondition))
+    rendered = _render(insight)
+
+    ai_commentary = None
+    if ai_consent:
+        ai_commentary = llm_insight.generate_commentary(
+            insight=rendered,
+            context=None if context is None else _context_out(context).as_features(),
+            settings=settings.llm_insight,
+        )
 
     return {
         "session_id": str(stored.id),
         "synthetic": stored.synthetic,
-        **_render(insight),
+        **rendered,
         "around_this_check": None if context is None else _context_out(context).as_features(),
+        "ai_commentary": ai_commentary,
     }
 
 
