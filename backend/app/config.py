@@ -57,7 +57,17 @@ class DeviationSettings(BaseSettings):
     # A baseline needs at least three accepted calibration sessions (BUILD_SPEC 4.1, enforced as
     # a DB CHECK). Three is the spec's floor: enough to compute a standard deviation with any
     # meaning at all, and it is a floor rather than a recommendation.
-    min_calibration_sessions: int = 3
+    # **1, not 3 — single-point calibration is the product.** Tera calibrates against one
+    # validated cuff reading and estimates from PTT thereafter (invariant 1, rewritten 14 August
+    # 2026; see docs/decisions.md). Requiring three prior sessions contradicted that: a patient
+    # who took their cuff reading on day one could not be calibrated until day two or three, and
+    # until then no estimate was produced at all.
+    #
+    # What is given up, stated plainly: a baseline from one capture carries that capture's noise
+    # with no averaging to damp it. Three sessions gave a steadier anchor. The mitigation is that
+    # the anchor is only ever an intercept — `pressure_estimate` refuses outright once a reading
+    # drifts past `max_ptt_drift_ms` from it — and that recalibration is prompted at four weeks.
+    min_calibration_sessions: int = 1
 
     # Minimum usable beats for a session to yield an estimate. A 60 s capture at 60 bpm gives
     # ~60 beats; requiring 30 means at least half the capture survived the quality gate.
@@ -257,8 +267,21 @@ class DeviceEligibilitySettings(BaseSettings):
     # arrival is interpolated between frames rather than read off directly. 60 fps halves that
     # error, hence the qualified band. Below 30 fps the interpolation is doing more work than
     # the measurement.
+    #
+    # **The provisional floor is 25, not 30, and the 0.2 fps that forced the change is the whole
+    # argument.** A handset delivering a measured 29.8 fps was graded `not_qualified` by a
+    # threshold set at exactly 30.0 — but no camera advertising "30 fps" delivers 30.000. Real
+    # hardware lands at 29.7-29.97 (the same reason broadcast video is 29.97), so a floor set at
+    # the nominal rate rejects every nominal-30 device in existence, which is not a clinical
+    # judgement about anything.
+    #
+    # 25 fps is where the measurement argument actually sits. A resting pulse is 0.7-3 Hz, so
+    # Nyquist needs 6 Hz and 25 leaves four times that margin; what frame rate really bounds is
+    # the interpolation of the PPG foot between frames, and at 25 fps that is a 40 ms window
+    # against transit-time shifts of 10-50 ms. Below about 20 the interpolation dominates the
+    # measurement, which is where the real floor belongs.
     camera_fps_qualified: float = 60.0
-    camera_fps_provisional: float = 30.0
+    camera_fps_provisional: float = 25.0
 
     # Clock offset stability, not absolute offset, is what matters: a constant offset between the
     # camera and sensor time bases is absorbed by personal calibration, a drifting one is not.

@@ -63,7 +63,10 @@ class CalibrationCreate(TeraModel):
     device_profile_id: uuid.UUID
     reference_cuff_reading_id: uuid.UUID
     session_ids: list[uuid.UUID] = Field(
-        min_length=3,
+        # 1, matching `min_calibration_sessions`. Single-point calibration is the product
+        # decision; the schema floor used to contradict the setting and won, because Pydantic
+        # rejects before the service is reached.
+        min_length=1,
         max_length=50,
         description="Accepted sessions on this device profile whose trimmed-mean PTT forms the "
         "baseline. At least three (BUILD_SPEC 4.1).",

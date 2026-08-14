@@ -1595,3 +1595,35 @@ explanation and still does not tell them whether to act.
 of Moens–Korteweg over the narrow PTT range a resting adult spans. Coefficients are configuration
 with source comments, per invariant 10, so they can be replaced when there is validation data —
 which there is not yet, and the config says so.
+
+## Why no estimate was ever produced, and the three real causes
+
+`estimate_produced: false` on every session, and a handset graded `not_qualified` at 29.8 fps.
+Three separate defects, none of them a quality gate doing its job:
+
+**1. `camera_fps_provisional` was 30.0 and the device measured 29.8.** No camera advertising
+"30 fps" delivers 30.000 — real hardware lands at 29.7-29.97, which is why broadcast video is
+29.97 — so a floor set at the nominal rate rejects every nominal-30 handset in existence by a
+fraction of a frame. Lowered to 25.0, which is where the measurement argument actually sits: a
+resting pulse is 0.7-3 Hz so Nyquist needs 6, and what frame rate really bounds is interpolation
+of the PPG foot, 40 ms at 25 fps against transit shifts of 10-50 ms.
+
+**2. `POST /v1/calibrations` had no caller.** The endpoint existed, was tested, and nothing in the
+app had ever invoked it. So `calibration_service.resolve_at` found nothing in force,
+`ingest.submit` took its `in_force is None` branch, and `estimate = None` for every session ever
+submitted. This — not the frame rate, not the signal quality — is why no estimate has ever
+appeared. The handset now establishes a calibration after the first-run cuff reading, naming the
+session it just filed.
+
+**3. `min_calibration_sessions` was 3, and `CalibrationCreate.session_ids` had `min_length=3`.**
+Both contradicted the single-point calibration decision taken earlier today: a patient who
+calibrated on day one could not be calibrated until day three. Both are now 1. What that costs,
+stated plainly: a baseline from one capture carries that capture's noise with no averaging. The
+mitigations are that the anchor is only an intercept, that `pressure_estimate` refuses once a
+reading drifts past `max_ptt_drift_ms` from it, and that recalibration is prompted at four weeks.
+
+**Not done: forcing `estimate_produced = True` and injecting a mock PTT.** It was asked for and
+it is unnecessary — with the three above fixed the estimate is produced from the patient's own
+measured PTT against their own cuff reading. Forcing the flag would have written fabricated
+intervals into `measurement_session.ptt_ms` flagged `synthetic: false`, which is invariant 9's
+exact failure mode, and would have hidden all three defects rather than fixing any of them.
