@@ -56,7 +56,13 @@ from app.schemas.phr import (
     SessionContextOut,
     SessionContextPatch,
 )
-from app.services import audit, contraindication, language, llm_insight
+from app.services import (
+    audit,
+    contraindication,
+    language,
+    llm_insight,
+    pressure_estimate,
+)
 from app.services.insight import Insight, InsightFeatures, evaluate
 
 router = APIRouter(tags=["phr"])
@@ -496,6 +502,41 @@ def _render(insight: Insight) -> dict:
     }
 
 
+
+def _estimated_pressure(db, check, settings):
+    """This check's PTT against its calibration anchor, in mmHg.
+
+    Everything here is read from rows that already exist: the session's own per-beat intervals,
+    the calibration in force when it was captured, and the cuff reading that calibration was
+    anchored to. Nothing is defaulted — a missing piece yields `None`, not a substitute.
+    """
+    capture = db.execute(
+        select(MeasurementSession)
+        .where(MeasurementSession.check_session_id == check.id)
+        .order_by(desc(MeasurementSession.started_at))
+        .limit(1)
+    ).scalar_one_or_none()
+    if capture is None or capture.calibration_id is None or not capture.ptt_ms:
+        return None
+
+    calibration = db.get(Calibration, capture.calibration_id)
+    if calibration is None:
+        return None
+    anchor = db.get(CuffReading, calibration.reference_cuff_reading_id)
+    if anchor is None:
+        return None
+
+    ptt_now = sum(capture.ptt_ms) / len(capture.ptt_ms)
+    return pressure_estimate.estimate(
+        ptt_now_ms=ptt_now,
+        baseline_ptt_ms=calibration.baseline_mean_ms,
+        calibration_systolic=anchor.systolic_mmhg,
+        calibration_diastolic=anchor.diastolic_mmhg,
+        calibration_established_at=calibration.established_at,
+        settings=settings.pressure_estimate,
+    )
+
+
 @router.get(
     "/check-sessions/{session_id}/insight",
     summary="The deterministic insight for a check",
@@ -532,6 +573,15 @@ def read_insight(
     insight = evaluate(_build_features(db, stored, context, precondition))
     rendered = _render(insight)
 
+    # PTT -> mmHg, anchored on this patient's own cuff calibration.
+    #
+    # Computed on read and stored nowhere, which keeps `trend_estimate` free of a pressure column
+    # and keeps this number from drifting out of step with the calibration it depends on: it is
+    # recomputed from the same rows every time, or not produced at all. `estimate()` returns None
+    # for a missing, stale or out-of-range anchor and the response simply carries nulls, leaving
+    # the direction-only result the client already renders.
+    estimated = _estimated_pressure(db, stored, settings)
+
     ai_commentary = None
     if ai_consent:
         ai_commentary = llm_insight.generate_commentary(
@@ -545,6 +595,13 @@ def read_insight(
         "session_id": str(stored.id),
         "synthetic": stored.synthetic,
         **rendered,
+        # Null whenever an estimate could not honestly be produced — see `pressure_estimate`.
+        "estimated_systolic": None if estimated is None else estimated.systolic_mmhg,
+        "estimated_diastolic": None if estimated is None else estimated.diastolic_mmhg,
+        "estimate_confidence": None if estimated is None else estimated.confidence,
+        "estimate_calibration_age_days": (
+            None if estimated is None else estimated.calibration_age_days
+        ),
         "around_this_check": None if context is None else _context_out(context).as_features(),
         "ai_commentary": ai_commentary,
     }

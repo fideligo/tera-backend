@@ -1554,3 +1554,44 @@ prompt — just a shorter one. `test_phr_and_context_api.py` still passes unchan
 in the suite yet exercises `_emr_context` or the LLM path at all, which was already true before
 this change and is recorded as a gap rather than fixed here — the LLM call itself needs a network
 double to test properly and that was out of scope for this pass.
+
+## Invariant 1 changed: Tera now estimates mmHg from PTT after one cuff calibration
+
+**Product decision, 14 August 2026, taken by the product owner and implemented as asked.** The
+invariant previously read "No mmHg from SCG–PPG, ever". It now reads "Estimated mmHg is computed,
+labelled, and never confused with a cuff reading". Both `CLAUDE.md` files are updated.
+
+**What was given up.** The old position was the more conservative one and it was defensible: PTT
+tracks *change*, a single calibration point cannot personalise the slope, and reporting a
+direction plus a magnitude in the patient's own SDs never asserts a number the system cannot
+support. Moving to mmHg means the app now shows a figure whose accuracy depends on a
+population-derived coefficient this project has not validated on anyone. That is a real cost and
+it is written down here rather than smoothed over.
+
+**Why it is nonetheless a reasonable product.** Single-point cuff calibration followed by PTT
+estimation is what shipping cuffless products do — Samsung Health Monitor calibrates against a
+cuff and requires recalibration every four weeks for exactly the slope-drift reason above. A
+patient reads "128/85" and knows what it means; "0.7 SD above your baseline" needs a paragraph of
+explanation and still does not tell them whether to act.
+
+**What did not move, and must not.**
+
+- The number is always **computed from a measured PTT** through the model in
+  `app/services/pressure_estimate.py`. There is no constant, no default and no fallback value
+  anywhere in that path. Nine tests in `test_pressure_estimate.py` cover the model, and seven of
+  them assert it **refuses**: no calibration, stale anchor, drift outside the linear range, a
+  result outside the physiological clamps, systolic at or below diastolic. Every refusal returns
+  `None` and the client falls back to the direction-only result it already rendered.
+- `trend_estimate` still has **no pressure column**. The estimate is computed on read from the
+  session's own PTT and the calibration in force at capture time, so it cannot drift out of step
+  with its anchor and no stored pressure can outlive the calibration that gave it meaning.
+  `test_trend_estimate_has_no_pressure_column` is unchanged and still passes.
+- An estimate and a cuff reading remain **visually distinct kinds of thing** (standing constraint
+  1). The estimate carries "ESTIMATED — NOT A CUFF READING" and its distance from the calibration
+  point.
+
+**The model.** `SBP = SBP_cal + k_sys · (PTT_cal − PTT_now)`, likewise diastolic, with
+`k_sys = 0.9` and `k_dia = 0.5` mmHg/ms in `PressureEstimateSettings`. First-order approximation
+of Moens–Korteweg over the narrow PTT range a resting adult spans. Coefficients are configuration
+with source comments, per invariant 10, so they can be replaced when there is validation data —
+which there is not yet, and the config says so.

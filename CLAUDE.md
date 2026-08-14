@@ -20,10 +20,31 @@ Safety and integrity properties, not preferences. Each is enforced in code **and
 named test. If a new requirement appears to conflict with one of these, **stop and ask** — do not
 reconcile it yourself.
 
-1. **No mmHg from SCG–PPG, ever.** `trend_estimate` has no systolic/diastolic column, and no API
-   response derived from SCG–PPG may contain a pressure value. Estimates are a direction
-   (`stable` / `increase` / `decrease`) plus a magnitude in units of the patient's own baseline
-   standard deviation. Only `cuff_reading` holds mmHg.
+1. **Estimated mmHg is computed, labelled, and never confused with a cuff reading.**
+   *Changed 14 August 2026 by product decision — this invariant previously read "No mmHg from
+   SCG–PPG, ever". The reasoning for the change, and what was given up, is in
+   `docs/decisions.md`.*
+
+   The product now does what cuffless products such as Samsung Health Monitor do: **one**
+   validated upper-arm cuff reading calibrates the patient, and later captures estimate systolic
+   and diastolic from pulse transit time. The rules that make that defensible:
+
+   - Every estimate comes from a **measured PTT through the stated model** in
+     `app/services/pressure_estimate.py`. No estimate is ever a constant, a default or a
+     fallback. Where the model cannot stand behind a number — no calibration, an anchor older
+     than `max_calibration_age_days`, drift beyond `max_ptt_drift_ms`, a result outside the
+     physiological clamps — the API returns `null` and the UI shows the direction-only result.
+     That is invariant 7 applied to pressure, and it is not negotiable.
+   - `trend_estimate` **still has no pressure column.** The estimate is computed on read from the
+     session's PTT and the calibration in force, so it can never drift out of step with the
+     anchor it depends on, and there is no stored pressure that outlives its calibration.
+   - **Only `cuff_reading` holds a measured mmHg.** An estimate and a cuff reading are different
+     kinds of thing and are never rendered in the same visual language (standing constraint 1):
+     the cuff reading is a solid fill with large numerals, the estimate is an outline carrying
+     "ESTIMATED — NOT A CUFF READING" and its distance from the calibration point.
+   - One calibration point fixes the **intercept, not the slope.** The sensitivity coefficients
+     are population-derived and are not personalised, which is the dominant error term and the
+     reason recalibration is prompted rather than optional.
 2. **No raw waveform is stored or transmitted.** Camera frames, ROI intensity series and
    accelerometer sample buffers never leave the handset and are never persisted. The deepest
    granularity the API accepts is **one derived interval per beat**.
@@ -62,7 +83,7 @@ two-sided property reads as complete. If an invariant has a handset half, name i
 
 | # | Enforced in | Named test |
 |---|---|---|
-| 1 | schema has no pressure column on `trend_estimate`; `TrendEstimateOut` schema | `test_trend_estimate_has_no_pressure_column`, `test_no_pressure_value_in_any_estimate_response` |
+| 1 | `trend_estimate` still has no pressure column; estimates computed on read in `app/services/pressure_estimate.py`, withheld rather than defaulted | `test_trend_estimate_has_no_pressure_column`, `test_no_pressure_value_in_any_estimate_response` (the stored estimate), `test_pressure_estimate.py` (9 — the model, and every case it refuses) |
 | 2 | `ptt_ms` length bound + plausibility gate | `test_ptt_array_length_bound_enforced`, `test_no_raw_waveform_fields_accepted` |
 | 3 | DB `CHECK ((status='rejected') = (rejection_reason IS NOT NULL))` | `test_rejected_session_requires_reason`, `test_accepted_session_must_not_have_reason`, `test_rejected_sessions_appear_in_summary` |
 | 4 | partial unique index + `superseded_by` + append-only trigger + capture-time resolution | `test_only_one_active_calibration_per_patient_per_device`, `test_recalibration_supersedes_and_does_not_mutate`, `test_estimate_references_calibration_in_force_at_capture_time` |

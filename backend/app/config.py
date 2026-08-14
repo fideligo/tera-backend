@@ -125,6 +125,52 @@ class DeviationSettings(BaseSettings):
         return self
 
 
+class PressureEstimateSettings(BaseSettings):
+    """PTT -> mmHg, anchored on the patient's own cuff calibration.
+
+    **What this is.** Single-point calibration: one validated cuff reading fixes the offset, and
+    a sensitivity coefficient converts a later change in pulse transit time into a change in
+    pressure. It is the same approach shipping cuffless products use (Samsung Health Monitor
+    calibrates against a cuff and then estimates, requiring recalibration every four weeks), and
+    it is a product decision recorded in docs/decisions.md, not a derivation this project claims
+    to have validated.
+
+    **What one calibration point can and cannot fix.** It fixes the *intercept* — where this
+    patient sits. It cannot fix the *slope*: the sensitivity below comes from population data and
+    is not personalised, so the further a reading drifts from the calibration point the less the
+    number is worth. That is the dominant error term and it is why `estimate_confidence` falls
+    away with distance from the anchor, and why recalibration is prompted rather than optional.
+
+    The relation is linear in delta-PTT, which is the first-order approximation of the
+    Moens-Korteweg / Bramwell-Hill relation over the narrow PTT range a resting adult spans.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="TERA_PRESSURE_")
+
+    #: mmHg per millisecond of PTT shortening, systolic. Reported sensitivities in PTT-BP studies
+    #: cluster around 0.7-1.3 mmHg/ms over the resting range; 0.9 is mid-range. Population-derived
+    #: and NOT personalised - see the class docstring.
+    systolic_mmhg_per_ms: float = 0.9
+
+    #: Diastolic tracks PTT more weakly than systolic in the same studies, roughly half.
+    diastolic_mmhg_per_ms: float = 0.5
+
+    #: Beyond this much drift from the calibration PTT the linear approximation is not defensible
+    #: and no number is produced. Invariant 7: withhold rather than guess.
+    max_ptt_drift_ms: float = 60.0
+
+    #: Output clamps. An estimate outside these is a signal problem, not a physiological finding,
+    #: and is withheld. Matches the cuff plausibility bounds so the two cannot disagree.
+    systolic_min_mmhg: int = 70
+    systolic_max_mmhg: int = 220
+    diastolic_min_mmhg: int = 40
+    diastolic_max_mmhg: int = 140
+
+    #: How old a calibration may be before the estimate is withheld and a new cuff reading asked
+    #: for. Samsung requires four weeks for the same reason: the slope drifts with vascular tone.
+    max_calibration_age_days: int = 28
+
+
 class PlausibilitySettings(BaseSettings):
     """Server-side payload plausibility (BUILD_SPEC 4.4, defence in depth).
 
@@ -410,6 +456,9 @@ class Settings(BaseSettings):
     reference: ReferenceSettings = Field(default_factory=ReferenceSettings)
     rhythm_model: RhythmModelSettings = Field(default_factory=RhythmModelSettings)
     llm_insight: LlmInsightSettings = Field(default_factory=LlmInsightSettings)
+    pressure_estimate: PressureEstimateSettings = Field(
+        default_factory=PressureEstimateSettings
+    )
 
 
 @lru_cache(maxsize=1)
