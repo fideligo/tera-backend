@@ -133,6 +133,7 @@ def other_tenant(db, client: TestClient) -> dict:
         "episode": episode,
         "device_profile": device,
         "calibration": calibration,
+        "cuff_reading": cuff,
         "auth": {"Authorization": f"Bearer {token}"},
         "clinician_auth": {"Authorization": f"Bearer {clinician_token}"},
     }
@@ -429,3 +430,82 @@ def test_an_expired_access_token_is_refused(client: TestClient, patient_user, se
     )
     assert response.status_code == 401
     assert "expired" in response.json()["detail"]
+
+
+# ------------------------------------------------------------------ HIST-01 is per-patient
+
+
+@pytest.mark.invariant
+def test_history_never_returns_another_patients_entries(
+    client: TestClient, auth, other_tenant, episode
+) -> None:
+    """`GET /v1/history` is scoped to the caller's own episodes, both ways.
+
+    Written because the endpoint was reported as returning global history for every account —
+    new users seeing the seeded demo record. It does not, and this is the proof rather than an
+    assurance: the other tenant's 150/95 reading exists in the same database, in the same table,
+    for the whole of this test, and must appear in exactly one of the two responses.
+
+    The scoping comes from the token: `require_patient(principal)` reads `patient_id` off the
+    caller's own claims and 403s rather than widening if it is absent, and `_episode_ids` turns
+    that into the `WHERE episode_id IN (...)` every branch of the query uses. There is no code
+    path that reaches a row outside it.
+    """
+    mine = client.get("/v1/history", params={"range": "all"}, headers=auth)
+    assert mine.status_code == 200
+    my_ids = {e["id"] for e in mine.json()["entries"]}
+
+    theirs = client.get(
+        "/v1/history", params={"range": "all"}, headers=other_tenant["auth"]
+    )
+    assert theirs.status_code == 200
+    their_ids = {e["id"] for e in theirs.json()["entries"]}
+
+    other_cuff_id = str(other_tenant["cuff_reading"].id)
+
+    # The other tenant's reading belongs to them and to nobody else.
+    assert other_cuff_id in their_ids
+    assert other_cuff_id not in my_ids
+
+    # And nothing at all is shared between the two records.
+    assert my_ids.isdisjoint(their_ids)
+
+
+@pytest.mark.invariant
+def test_history_for_a_patient_with_no_records_is_empty(
+    client: TestClient, db, other_tenant
+) -> None:
+    """A brand-new account sees `[]`, not the seeded demo episode.
+
+    The complaint this answers was specifically that *new* accounts saw everyone's history. A
+    patient with no episode has no `episode_ids` at all, which is the early return in
+    `read_history` — and with data for two other patients sitting in the table.
+    """
+    fresh = Patient(
+        pseudonym=f"TERA-FRESH-{uuid.uuid4().hex[:8]}",
+        clinic_id="CLINIC-FRESH",
+        enrolled_at=datetime.now(tz=timezone.utc),
+    )
+    db.add(fresh)
+    db.flush()
+    user = AppUser(
+        subject=f"fresh-{uuid.uuid4().hex[:8]}@test.invalid",
+        password_hash=hash_password(DEMO_PASSWORD),
+        role=UserRole.PATIENT,
+        clinic_id="CLINIC-FRESH",
+        patient_id=fresh.id,
+    )
+    db.add(user)
+    db.commit()
+
+    token = client.post(
+        "/v1/auth/token", data={"username": user.subject, "password": DEMO_PASSWORD}
+    ).json()["access_token"]
+
+    response = client.get(
+        "/v1/history",
+        params={"range": "all"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["entries"] == []
