@@ -112,6 +112,20 @@ def compute_baseline(session_ptt_values: list[float], settings: DeviationSetting
             f"sessions, got {len(session_ptt_values)}"
         )
 
+    # Two is the floor of the *arithmetic*, not of the policy.
+    #
+    # `min_calibration_sessions` is configuration and has been lowered to 1, which is below what
+    # a sample standard deviation is defined for: `statistics.stdev` raises `StatisticsError` on a
+    # single value, and an unhandled exception here is a 500 rather than a refusal. This states the
+    # same refusal the caller already handles, in the same shape, so lowering the setting further
+    # cannot turn a configuration choice into a crash. It does not raise the configured minimum —
+    # a policy of 1 stays a policy of 1, it simply fails cleanly where it is impossible.
+    if len(session_ptt_values) < 2:
+        raise ValueError(
+            "a baseline needs at least 2 calibration sessions to have any spread at all, "
+            f"got {len(session_ptt_values)}"
+        )
+
     mean_ms = statistics.fmean(session_ptt_values)
     sd_ms = statistics.stdev(session_ptt_values)
 

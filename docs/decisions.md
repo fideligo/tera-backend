@@ -1682,3 +1682,50 @@ auto-deploy triggers on the push itself and would ship a red commit. It skips ra
 `KOYEB_API_TOKEN` is absent, so a fork still gets the test job. **With the seven above unresolved,
 that gate is red and nothing deploys**, which is the correct state rather than a problem with the
 workflow.
+
+## The section 24 tests, reconciled to the engine
+
+The seven failures are resolved by updating the tests, on the product owner's decision after the
+invariant concern below was raised twice. What each one now records:
+
+- **Stable, under threshold** — the action moved from `continue_monitoring` to
+  `preventive_recommendation`. The state did not.
+- **A reference above threshold** now outranks a stable trend. It used to report `within_pattern`
+  with a `reference_above_threshold` chip beside it; the cuff figure is checked first now and
+  decides the row alone, routing to follow-up. That is an escalation, not a relaxation, and
+  `reference_above_threshold` is no longer emitted as a context code at all — the state carries it.
+- **A single change under a non-standard precondition** gets `rest_and_repeat` rather than its own
+  `standardize_and_repeat`. The single-change row no longer distinguishes the two reasons a check
+  is less comparable; the context chip still names which applied.
+- **A persistent change with a fresh cuff below threshold** still asks for a cuff, where it used to
+  accept the reading and continue monitoring, and the reference it reports back stays the
+  calibration anchor rather than becoming the reading just taken. Both are behaviour changes worth
+  a second look — asking for a cuff from someone who has just supplied one reads as the app not
+  having noticed, and the figure shown beside it is not the most recent thing known about them.
+  Recorded, not corrected.
+- **A persistent change with a fresh cuff above threshold** keeps `follow_up_pathway` and reports
+  `bp_above_threshold` rather than `persistent_change`, naming what drives the escalation.
+- **A missed dose on a stable check** keeps its guarantee: the code is surfaced, the action is not a
+  dose instruction. Only the action's name changed.
+
+**Two tests were added rather than updated**, for the branch that had no coverage and is the one
+that was argued about: a persistent change carrying a lifestyle context or a missed dose diverts
+from `confirm_with_cuff` to `personalized_intervention`. So the case with more going on gets advice
+where the plainer case gets a cuff. Invariant 7 asks for a cuff or clinical contact when the picture
+is ambiguous; invariant 6 forbids advising on medication, and a missed dose steering the branch runs
+at both. The product owner's decision is to keep the engine as it is. The tests exist so the
+behaviour is visible rather than merely present, and `personalized_intervention`'s wording keeps the
+cuff in the sentence the patient actually reads.
+
+**A crash found on the way.** `min_calibration_sessions` has been lowered from BUILD_SPEC 4.3's
+three to one — configuration, and a real relaxation: fewer sessions means a baseline whose spread is
+estimated from almost nothing, and every later deviation is measured in units of that spread. But
+one value has no standard deviation, so `compute_baseline` reached `statistics.stdev` and raised
+`StatisticsError`, which is an unhandled exception and a 500 rather than a refusal. A floor of two
+now refuses it the same way every other unusable baseline is refused. That does not raise the
+configured minimum — a policy of one stays a policy of one; it fails cleanly where it is impossible.
+
+`test_baseline_requires_three_sessions` became two tests: the rule, exercised against an explicit
+setting so it stays covered whatever the ambient figure is, and an assertion of the configured value
+so a change to the figure is deliberate. `compute_baseline`'s own docstring still cites three, which
+is now the only place the spec figure survives.

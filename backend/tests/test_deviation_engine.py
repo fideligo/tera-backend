@@ -64,9 +64,49 @@ def test_trimmed_mean_rejects_an_empty_array(deviation_settings) -> None:
         trimmed_session_ptt([], deviation_settings)
 
 
-def test_baseline_requires_three_sessions(deviation_settings) -> None:
+def test_baseline_refuses_fewer_sessions_than_configured(deviation_settings) -> None:
+    """The rule, against the configured minimum rather than a number written twice.
+
+    This asserted `at least 3` — BUILD_SPEC 4.3's figure, and the value
+    `min_calibration_sessions` held when it was written. The setting has since been lowered to 1,
+    so the assertion failed on a threshold change rather than on a behaviour change. Testing it
+    against the setting keeps the *rule* covered whatever the figure is, which is the same shape
+    the eligibility band uses; `test_the_configured_minimum_is_visible` below is what makes a
+    change to the figure itself deliberate.
+    """
+    # Against an explicit setting rather than the ambient one, so the rule is exercised in this
+    # build whatever the configured figure happens to be. A test that skipped itself when the
+    # minimum was lowered would stop covering the rule at exactly the moment the rule got looser.
+    strict = deviation_settings.model_copy(update={"min_calibration_sessions": 3})
+
     with pytest.raises(ValueError, match="at least 3"):
-        compute_baseline([250.0, 252.0], deviation_settings)
+        compute_baseline([250.0, 252.0], strict)
+
+    # And it is a threshold, not a constant: the same call passes once the setting allows it.
+    assert compute_baseline([250.0, 252.0], deviation_settings).n_sessions == 2
+
+
+def test_the_configured_minimum_is_visible(deviation_settings) -> None:
+    """BUILD_SPEC 4.3 says "at least three accepted calibration sessions".
+
+    It is 1 in this build. That is a real relaxation of the spec figure and not a typo to correct
+    in passing: fewer sessions means a baseline whose spread is estimated from almost nothing, and
+    every later deviation is measured in units of that spread. Asserted so the gap between the
+    spec and the build is stated somewhere rather than being noticed by whoever next reads
+    `compute_baseline`'s docstring, which still says three.
+    """
+    assert deviation_settings.min_calibration_sessions == 1
+
+
+def test_one_session_is_refused_however_low_the_minimum_goes(deviation_settings) -> None:
+    """A single value has no standard deviation, so this is arithmetic and not policy.
+
+    Without the guard, `min_calibration_sessions = 1` reaches `statistics.stdev` with one value
+    and raises `StatisticsError` — an unhandled exception, which is a 500 to whoever asked. It
+    refuses the same way every other unusable baseline does instead.
+    """
+    with pytest.raises(ValueError, match="at least 2"):
+        compute_baseline([250.0], deviation_settings)
 
 
 def test_baseline_uses_sample_standard_deviation(deviation_settings) -> None:
