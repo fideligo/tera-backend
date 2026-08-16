@@ -490,8 +490,17 @@ def _render(insight: Insight) -> dict:
     """Apply the language layer. Decision and wording stay separable."""
     return {
         **insight.to_json(),
-        "hero": language.RESULT_STATE_WORDING[insight.result_state.value],
-        "next_best_step": language.PRIORITY_ACTION_WORDING[insight.priority_action_code.value],
+        # `.get` with a floor, not `[]`. A code the language layer has not caught up with used to
+        # raise `KeyError` here, and an unhandled exception in this handler is a 500 — so the whole
+        # insight vanished rather than one sentence being wrong. The real guard is
+        # `test_every_code_the_engine_can_emit_has_wording`, which fails the build on a missing
+        # entry; this only decides what a patient sees if one ever reaches production.
+        "hero": language.RESULT_STATE_WORDING.get(
+            insight.result_state.value, language.RESULT_STATE_FALLBACK
+        ),
+        "next_best_step": language.PRIORITY_ACTION_WORDING.get(
+            insight.priority_action_code.value, language.PRIORITY_ACTION_FALLBACK
+        ),
         "context_chips": [
             language.CONTEXT_CODE_WORDING[code]
             for code in insight.context_codes

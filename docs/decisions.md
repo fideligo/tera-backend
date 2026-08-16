@@ -1627,3 +1627,58 @@ it is unnecessary — with the three above fixed the estimate is produced from t
 measured PTT against their own cuff reading. Forcing the flag would have written fabricated
 intervals into `measurement_session.ptt_ms` flagged `synthetic: false`, which is invariant 9's
 exact failure mode, and would have hidden all three defects rather than fixing any of them.
+
+## CI, a Dockerfile that never migrated, and a 500 on the ordinary path
+
+**The image ran no migrations.** `alembic upgrade head` existed only in `docker-compose.yml`, as a
+`command:` override on the `api` service. Locally that is invisible — Compose supplies it — but any
+other host builds this image and runs the CMD in it, so a deploy would have started the API against
+a schema nobody had migrated, and the first request touching a new column is where that surfaces.
+The migration is in the image's CMD now, with `exec` so uvicorn keeps PID 1's signals, and
+`${PORT:-8000}` so a platform host can place the listener while Compose and a bare `docker run`
+behave exactly as before. It is idempotent and safe on restart; it is *not* safe to run from several
+instances at once, so scaling past one moves it to a release step that runs ahead of the rollout.
+
+**`GET /v1/check-sessions/{id}/insight` answered 500 whenever a check was unremarkable.**
+`PriorityAction.PREVENTIVE_RECOMMENDATION` and `PERSONALIZED_INTERVENTION` were added to the enum by
+the intervention-engine work and never added to `PRIORITY_ACTION_WORDING`, and `_render` looks that
+map up with `[]`. The stable branch of the matrix — the ordinary, everyday result — emits
+`preventive_recommendation`, so the endpoint raised `KeyError` and the whole insight vanished rather
+than one sentence being wrong. `test_every_code_the_engine_can_emit_has_wording` had been failing
+about exactly this, with a comment reading "a code with no sentence would render as a blank space on
+a patient's screen"; the reality was worse than blank.
+
+Both codes now have wording, and it is deliberately non-advisory — "preventive recommendation" and
+"personalized intervention" are names that invite a diagnosis or a medication instruction, and
+invariant 6 forbids both. What the patient is told is what to do next with Tera. The lookups use
+`.get` with a floor as defence in depth; the real guard remains the test, which fails the build on a
+missing entry.
+
+**Left open: the section 24 matrix.** Seven tests still fail. They are not stale in the ordinary
+sense — they encode the decision matrix from the PM spec, and commit 15cf384 changed the engine's
+outputs without touching them. Reconciling most of them is a matter of deciding which is now
+authoritative. One is not:
+
+    if f.deviation_state is DeviationState.PERSISTENT:
+        has_lifestyle = sleep_less | stress_higher | medication missed
+        if has_lifestyle: action = PERSONALIZED_INTERVENTION   # was CONFIRM_WITH_CUFF
+
+A persistent change with a lifestyle or missed-dose context now produces advice where it previously
+produced an escalation. Invariant 7 says an ambiguous picture asks for a cuff reading or clinical
+contact; a missed dose routed into an "intervention" branch also runs at invariant 6, which forbids
+advising on medication. That is a clinical decision and it is not made here. The wording added above
+keeps the escalation in the sentence a patient reads (`"Note what has changed, and confirm with a
+cuff reading"`) while the branch itself stays unresolved.
+
+**CI.** `.github/workflows/backend_deploy.yml` runs pytest against a real Postgres service — the
+suite exercises arrays, JSONB, partial unique indexes and append-only triggers, which is where
+invariants 4, 5 and 9 are actually enforced, so a job that fell back to SQLite would be green about
+the half that matters least. It also applies the migration chain from empty, which is what the
+deployed image does on start; a migration that only works against a database someone already had
+fails on the first fresh environment.
+
+The Koyeb deploy is an explicit step rather than Koyeb's git auto-deploy, so that the tests gate it —
+auto-deploy triggers on the push itself and would ship a red commit. It skips rather than fails when
+`KOYEB_API_TOKEN` is absent, so a fork still gets the test job. **With the seven above unresolved,
+that gate is red and nothing deploys**, which is the correct state rather than a problem with the
+workflow.

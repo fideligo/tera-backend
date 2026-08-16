@@ -1,0 +1,129 @@
+# Backend — test against a real Postgres, then deploy to Koyeb.
+#
+# # Why the Postgres service is not optional
+#
+# The suite cannot run on SQLite. It exercises array columns, JSONB, partial unique indexes and
+# append-only triggers — the things that enforce invariants 4, 5 and 9 — and the fixture creates
+# and drops its own database per run, so it needs a server it has CREATE DATABASE rights on. A CI
+# job that skipped this and ran a subset would be green about the half that matters least.
+#
+# # Deployment
+#
+# Koyeb builds `backend/Dockerfile`. That image now runs `alembic upgrade head` before uvicorn and
+# listens on `$PORT` — previously only Compose ran migrations, via a `command:` override, so a
+# deploy from this image would have started against an unmigrated schema.
+#
+# The redeploy step is explicit rather than relying on Koyeb's git auto-deploy, so that **tests
+# gate the deploy**. Auto-deploy triggers on the push itself and would ship a red commit.
+
+name: Backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend_deploy.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+  workflow_dispatch:
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test against Postgres
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Matches the Compose service, so a failure here is a real failure rather than a version
+        # difference.
+        image: postgres:16
+        env:
+          POSTGRES_USER: tera
+          POSTGRES_PASSWORD: tera_ci_password
+          POSTGRES_DB: tera
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tera"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TERA_DATABASE_URL: postgresql+psycopg://tera:tera_ci_password@localhost:5432/tera
+      TERA_TEST_DATABASE_URL: postgresql+psycopg://tera:tera_ci_password@localhost:5432/tera_test
+      # CI-only, and long enough to pass the production guard in `main.py`. Never a real secret:
+      # the value that signs real tokens lives in the Koyeb service, not in this file.
+      TERA_JWT_SECRET: ci-only-secret-not-used-anywhere-a-real-token-is-minted-000000
+      TERA_ENV: development
+      TERA_LOG_LEVEL: WARNING
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # The image is python:3.12-slim; `requires-python` allows 3.11, and CI runs what ships.
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Proves the migration chain applies from empty, which is exactly what the deployed image
+      # does on start. A migration that only works against a database someone already had is a
+      # migration that fails on the first fresh environment.
+      - name: Migrate from empty
+        working-directory: backend
+        run: alembic upgrade head
+
+      - name: Test
+        working-directory: backend
+        run: pytest -q
+
+      # Named separately so the invariant subset is visible in the log as its own result. These are
+      # the safety properties; when one breaks it should be legible at a glance which.
+      - name: Invariant subset
+        working-directory: backend
+        run: pytest -q -m invariant
+
+  deploy:
+    name: Deploy to Koyeb
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Koyeb CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/koyeb/koyeb-cli/master/install.sh | sh
+          echo "$HOME/.koyeb/bin" >> "$GITHUB_PATH"
+
+      # Skipped rather than failed when the token is absent, so a fork or a repo that has not been
+      # connected to Koyeb yet still gets the value of the test job above.
+      - name: Redeploy
+        if: ${{ env.KOYEB_TOKEN != '' }}
+        env:
+          KOYEB_TOKEN: ${{ secrets.KOYEB_API_TOKEN }}
+          KOYEB_SERVICE: ${{ vars.KOYEB_SERVICE || 'tera/api' }}
+        run: |
+          koyeb --token "$KOYEB_TOKEN" service redeploy "$KOYEB_SERVICE"
+
+      - name: Say why nothing deployed
+        if: ${{ env.KOYEB_TOKEN == '' }}
+        env:
+          KOYEB_TOKEN: ${{ secrets.KOYEB_API_TOKEN }}
+        run: |
+          echo "KOYEB_API_TOKEN is not set, so no deploy was attempted."
+          echo "Tests passed. Add the secret to enable deployment."

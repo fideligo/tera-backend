@@ -242,7 +242,28 @@ PRIORITY_ACTION_WORDING: dict[str, str] = {
     "confirm_with_cuff": "Confirm with a fresh upper-arm cuff reading",
     "follow_up_pathway": "Arrange a follow-up with your doctor",
     "set_bp_reference": "Add a cuff reading to set your BP reference",
+    # **These two were missing, and `_render` looks the map up with `[]`.** The engine emits
+    # `preventive_recommendation` for every stable result — the ordinary, everyday outcome — so
+    # `GET /v1/check-sessions/{id}/insight` raised `KeyError` and answered 500 on the most common
+    # path in the product. `test_every_code_the_engine_can_emit_has_wording` had been reporting it
+    # the whole time; its own comment says "a code with no sentence would render as a blank space
+    # on a patient's screen", and the reality was worse than blank.
+    #
+    # Both sentences are deliberately non-advisory. Invariant 6 forbids stating or implying a
+    # diagnosis or a medication change, and "preventive recommendation" and "personalized
+    # intervention" are both names that invite exactly that. What the patient is told is what to do
+    # next with Tera, not what to do about their health.
+    "preventive_recommendation": "Keep to your usual routine and your regular checks",
+    # Escalation preserved on purpose: this code replaced `confirm_with_cuff` on the persistent
+    # -change-with-context branch, and invariant 7 says an ambiguous picture asks for a cuff rather
+    # than for advice. See docs/decisions.md — the branch itself is still an open question.
+    "personalized_intervention": "Note what has changed, and confirm with a cuff reading",
 }
+
+#: Shown when a code has no sentence. Neither states anything about the patient, because at the
+#: point either is used the system does not know what it meant to say.
+RESULT_STATE_FALLBACK = "Your check was recorded"
+PRIORITY_ACTION_FALLBACK = "Continue your regular monitoring"
 
 #: Section 23.3's context chips. Shown beside a result, never as its cause.
 CONTEXT_CODE_WORDING: dict[str, str] = {
