@@ -29,35 +29,6 @@ The most consequential one, worth stating here: **no API response derived from S
 a blood-pressure value.** `trend_estimate` has no systolic or diastolic column, and a schema
 introspection test enforces it against the live database. Only `cuff_reading` holds mmHg.
 
-## Deploy
-
-[![Deploy to Koyeb](https://www.koyeb.com/static/images/deploy/button.svg)](https://app.koyeb.com/deploy?name=tera-backend&type=git&repository=fideligo%2Ftera-backend&branch=main&workdir=backend&builder=dockerfile&instance_type=free&regions=fra&instances_min=0&autoscaling_sleep_idle_delay=3900&env%5BTERA_ENV%5D=production&env%5BTERA_DATABASE_URL%5D=&env%5BTERA_JWT_SECRET%5D=)
-
-Builds `backend/Dockerfile`, which runs `alembic upgrade head` before starting uvicorn and listens
-on `$PORT`. Free instance, Frankfurt, scaling to zero after about an hour idle — so the first
-request after a quiet period pays for a cold start *and* a migration check.
-
-**Two values are left blank on purpose, and the deploy will not work until you fill them in.**
-
-| Variable | Why it is not pre-filled |
-|---|---|
-| `TERA_DATABASE_URL` | It contains a database password. This README is public, and anything committed here is public permanently and in git history. Paste it into the Koyeb form, where it is stored as a service secret. Supabase requires TLS, so append `?sslmode=require` if the connection is refused. |
-| `TERA_JWT_SECRET` | It signs every access and refresh token. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. |
-
-`TERA_ENV=production` is pre-filled and is doing real work: `app/main.py` refuses to start when the
-environment is production and the JWT secret is still the development default. Without it the
-service would come up happily signing tokens with `dev-only-insecure-secret-change-me`, which is in
-this repository — meaning anyone could mint a token for any patient and read their record. The
-startup guard turns that from a silent hole into a failed deploy.
-
-Optional, and worth setting: `TERA_LLM_API_KEY` enables the consent-gated insight paragraph. Without
-it, that field is simply absent and every other part of the insight is unchanged.
-
-**A deploy button is not a deployment pipeline.** It creates the service once. Afterwards,
-`.github/workflows/backend_deploy.yml` runs the test suite against a real Postgres and only then
-calls `koyeb service redeploy`, so a red commit cannot ship. That needs `KOYEB_API_TOKEN` as a
-repository secret; without it the workflow still tests and simply skips the deploy step.
-
 ## Quick start
 
 Requires Docker.
