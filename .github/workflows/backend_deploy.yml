@@ -100,7 +100,12 @@ jobs:
   deploy:
     name: Deploy to Koyeb
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # push covers the normal case; workflow_dispatch is what a manual "Run workflow" click sends,
+    # and without it here the whole deploy job was skipped before the token check ever ran —
+    # which is why adding KOYEB_API_TOKEN didn't visibly do anything on a manual trigger.
+    if: |
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
