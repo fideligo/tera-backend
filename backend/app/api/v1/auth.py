@@ -31,6 +31,9 @@ from app.models import (
     UserRole,
 )
 from app.schemas.auth import (
+    ChangePasswordRequest,
+    CloseAccountRequest,
+    CloseAccountResponse,
     LogoutRequest,
     RefreshRequest,
     RegisterPatientRequest,
@@ -617,3 +620,166 @@ def login_b2c(body: LoginRequestJson, request: Request, db: DbDep, settings: Set
     audit.record(db, principal=principal, action=AuditAction.AUTH_TOKEN_ISSUED, target=user.id)
     db.commit()
     return tokens
+
+
+@router.post(
+    "/password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Change the password on the current account",
+)
+def change_password(
+    body: ChangePasswordRequest,
+    db: DbDep,
+    principal: PrincipalDep,
+) -> None:
+    """Re-prove the current password, then replace it and end every other session.
+
+    # Why the current password is required
+
+    The caller already holds a valid access token, so this looks redundant. It is not: a token can
+    be one that was stolen, or a session left signed in on a shared handset. Requiring the password
+    is what keeps possession of a token from becoming a permanent takeover, and it is why this
+    route does not simply trust the bearer.
+
+    # Why every refresh token is revoked
+
+    A password change is what someone does when they think their account is compromised. Leaving
+    the attacker's refresh token alive would make the change theatre — they would keep their access
+    while the patient believed they had removed it. Revoking the family means every device, this
+    one included, has to sign in again with the new password.
+
+    # Why a wrong current password is 403 and not 401
+
+    401 means "you are not authenticated", and the client's transparent-refresh path treats it as a
+    dead session and signs the patient out. That is the wrong response to a typo in a form field.
+    403 says the request was refused, and the app can show it against the field.
+    """
+    user = db.get(AppUser, principal.user_id)
+    if user is None:
+        # The token decoded but the account behind it is gone — closed on another device, most
+        # likely. Not a state to invent a recovery for.
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="account not found")
+
+    if not verify_password(body.current_password, user.password_hash):
+        audit.record(
+            db,
+            principal=principal,
+            action=AuditAction.AUTH_LOGIN_FAILED,
+            target=str(user.id),
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The current password is not correct.",
+        )
+
+    user.password_hash = hash_password(body.new_password)
+    revoked = refresh_token_service.revoke_all_for_user(
+        db, user_id=user.id, reason="password_changed"
+    )
+    audit.record(
+        db,
+        principal=principal,
+        action=AuditAction.AUTH_PASSWORD_CHANGED,
+        target=str(user.id),
+    )
+    db.commit()
+
+    # Ids and counts. Never the password, and never the subject — the deny-list covers the obvious
+    # names but the rule is that this line says what happened, not to whom.
+    log.info("auth_password_changed", extra={"sessions_revoked": revoked})
+
+
+@router.post(
+    "/account/close",
+    response_model=CloseAccountResponse,
+    summary="Close the account, retaining the pseudonymous clinical record",
+)
+def close_account(
+    body: CloseAccountRequest,
+    db: DbDep,
+    principal: PrincipalDep,
+) -> CloseAccountResponse:
+    """Delete the sign-in identity. **The clinical record is retained, pseudonymously.**
+
+    # What this deletes, and what it deliberately does not
+
+    Deleted: the `app_user` row — the login subject and the password hash — and every refresh token
+    issued to it. After this call nobody can authenticate as this person again.
+
+    Retained: the `patient` row and its clinical history. That table is pseudonymous by design
+    (BUILD_SPEC 4.1: "pseudonymous id, clinic id, enrolled_at. No name or contact fields"), and
+    every clinical table carries a `BEFORE UPDATE OR DELETE` trigger enforcing invariant 5. So the
+    record cannot be deleted here even if that were wanted, and what survives carries no name, no
+    contact and no link back to the person once the account row is gone.
+
+    This is the shape of the App Store's account-deletion requirement that a health record can
+    actually satisfy: the identity goes, the de-identified measurements stay under a retention
+    policy. It is stated to the patient in those terms rather than as "everything is deleted",
+    which would be false.
+
+    # POST rather than DELETE
+
+    `test_clinical_rows_have_no_update_or_delete_route` walks the OpenAPI schema and fails on any
+    PUT, PATCH or DELETE anywhere in the API — deliberately, so a mutable-looking route cannot slip
+    in. Closing an account is an action on the caller's own identity rather than a deletion of a
+    clinical resource, and it is modelled as one. The invariant that test defends is untouched.
+
+    # The audit log keeps the subject, and the patient is told so
+
+    `audit.record` stores `principal.subject` as the actor, and the audit log is append-only. Every
+    prior sign-in already wrote it. Closing the account cannot remove those entries and must not
+    claim to: the security trail is exactly the thing an append-only log exists to preserve.
+    """
+    user = db.get(AppUser, principal.user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="account not found")
+
+    if not verify_password(body.password, user.password_hash):
+        audit.record(
+            db,
+            principal=principal,
+            action=AuditAction.AUTH_LOGIN_FAILED,
+            target=str(user.id),
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="That password is not correct.",
+        )
+
+    pseudonym: str | None = None
+    if user.patient_id is not None:
+        patient = db.get(Patient, user.patient_id)
+        pseudonym = None if patient is None else patient.pseudonym
+
+    # Written *before* the row goes: the audit entry names the account that was closed, and after
+    # the delete there is no principal left to attribute it to.
+    audit.record(
+        db,
+        principal=principal,
+        action=AuditAction.AUTH_ACCOUNT_CLOSED,
+        target=str(user.id),
+    )
+
+    # `refresh_token.user_id` is a RESTRICT foreign key, so the tokens have to go first or the
+    # delete below fails on the constraint rather than on anything meaningful. They are not an
+    # append-only table; the audit entries recording their issue are, and those stay.
+    refresh_token_service.revoke_all_for_user(db, user_id=user.id, reason="account_closed")
+    db.query(RefreshToken).filter(RefreshToken.user_id == user.id).delete(
+        synchronize_session=False
+    )
+
+    db.delete(user)
+    db.commit()
+
+    log.info("auth_account_closed")
+
+    return CloseAccountResponse(
+        closed=True,
+        pseudonym=pseudonym,
+        detail=(
+            "Your sign-in details have been deleted and you can no longer sign in. Your readings "
+            "are kept under a pseudonym, with no name or contact details attached to them."
+        ),
+    )

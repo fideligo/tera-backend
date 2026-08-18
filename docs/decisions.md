@@ -1729,3 +1729,42 @@ configured minimum — a policy of one stays a policy of one; it fails cleanly w
 setting so it stays covered whatever the ambient figure is, and an assertion of the configured value
 so a change to the figure is deliberate. `compute_baseline`'s own docstring still cites three, which
 is now the only place the spec figure survives.
+
+## Closing an account without deleting a clinical record
+
+The App Store requires in-app account deletion. Invariant 5 forbids deleting clinical rows, and not
+merely as a convention: every clinical table carries a `BEFORE UPDATE OR DELETE` trigger, and
+`test_clinical_rows_have_no_update_or_delete_route` walks the OpenAPI schema and fails on any PUT,
+PATCH or DELETE anywhere in the API. Both constraints are real and neither is negotiable on its own.
+
+What resolves them is a distinction the schema already makes. `app_user` holds the login subject and
+the password hash and is **not** in `APPEND_ONLY_TABLES`. `patient` is pseudonymous by construction —
+BUILD_SPEC 4.1, "no name or contact fields", and there is nowhere on the row to put one. So deleting
+the account row removes every identifier the system holds, while the clinical record survives as
+rows that name nobody. That is the shape of the deletion requirement a health record can actually
+satisfy, and it is what `POST /v1/auth/account/close` does.
+
+**POST, not DELETE.** Closing an account is an action on the caller's own identity rather than the
+deletion of a clinical resource. Modelling it as a POST is not a way around the route test — the
+invariant that test defends is about clinical rows, and none is touched — and it keeps the rule that
+a mutable-looking route cannot appear in the schema unnoticed.
+
+**Refresh tokens go first.** `refresh_token.user_id` is a RESTRICT foreign key, so without deleting
+them the account delete fails on a constraint rather than on anything meaningful.
+
+**What closure cannot erase, and the UI says so.** `audit.record` stores `principal.subject` as the
+actor, and the audit log is append-only. Every prior sign-in already wrote the address there and no
+trigger will let it be rewritten — that is what an append-only security log is for. The close screen
+therefore lists what is kept alongside what is deleted, including "a security log recording that
+this account existed and was closed". Claiming a total erasure would be the more serious failure of
+the two: a patient can act on an accurate limit, and cannot act on a false promise.
+
+**Changing a password revokes every session.** A password change is what someone does when they
+believe they are compromised; leaving the other device's refresh token alive would make the change
+theatre. It also requires the current password even though the caller holds a valid token — a token
+can be a stolen one, or a session left open on a shared handset, and re-proving the password is what
+stops possession of a token becoming a permanent takeover.
+
+**A wrong current password is 403, not 401.** The handset treats a 401 as a dead session and signs
+the patient out; answering a mistyped form field that way would be actively wrong. 403 says the
+request was refused and the app shows it against the field.

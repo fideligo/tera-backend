@@ -168,6 +168,10 @@ class AuditAction(str, Enum):
     AUTH_LOGIN_FAILED = "auth_login_failed"
     AUTH_LOGOUT = "auth_logout"
     AUTH_TOKEN_REFRESHED = "auth_token_refreshed"
+    AUTH_PASSWORD_CHANGED = "auth_password_changed"
+    # Closing an account removes the sign-in credential. The clinical record is retained under its
+    # pseudonym, so this is an account event and never a clinical one — see docs/decisions.md.
+    AUTH_ACCOUNT_CLOSED = "auth_account_closed"
     AUTH_REFRESH_REUSE_DETECTED = "auth_refresh_reuse_detected"
     USER_REGISTERED = "user_registered"
     CLINICIAN_ACCESS_DENIED = "clinician_access_denied"

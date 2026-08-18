@@ -132,3 +132,40 @@ class RegisterPatientResponse(TeraModel):
     pseudonym: str
     episode_id: uuid.UUID
     tokens: TokenResponse
+
+
+class ChangePasswordRequest(TeraModel):
+    """`POST /v1/auth/password`.
+
+    The current password is required even though the caller already holds a valid access token.
+    A token can be a stolen one, or a session left open on a shared handset; re-proving the
+    password is what stops either of those becoming a permanent takeover, and it is the reason
+    this endpoint cannot simply trust the bearer.
+    """
+
+    current_password: str = Field(max_length=MAX_PASSWORD_BYTES)
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_BYTES)
+
+
+class CloseAccountRequest(TeraModel):
+    """`POST /v1/auth/account/close`.
+
+    Password-confirmed for the same reason as above, and more so: this one cannot be undone.
+    """
+
+    password: str = Field(max_length=MAX_PASSWORD_BYTES)
+
+
+class CloseAccountResponse(TeraModel):
+    """What closing the account actually did.
+
+    Returned rather than a bare 204 because the two halves are not symmetrical and the client has
+    to be able to say so. The sign-in credential is gone; the clinical record is not, and telling
+    a patient otherwise would be a false claim about their own data.
+    """
+
+    closed: bool
+    #: The pseudonym the retained clinical record now stands under, with nothing linking it back.
+    #: Returned once, here, because after this call there is no authenticated way to ask for it.
+    pseudonym: str | None = None
+    detail: str
