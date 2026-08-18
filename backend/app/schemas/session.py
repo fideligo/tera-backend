@@ -46,6 +46,19 @@ class SessionQuality(TeraModel):
     motion_index: float = Field(ge=0, le=1, description="0 is still, 1 is unusable movement.")
     clock_offset_ms: float | None = Field(default=None, ge=-10_000, le=10_000)
 
+    #: Which accelerometer axis the intervals were derived from: ``z``, ``x`` or ``y``.
+    #:
+    #: The aortic-valve signature sits on the axis normal to the chest wall, and which physical
+    #: axis that is depends on how the patient held the phone. The handset now tries all three and
+    #: keeps whichever passes its gate with the tightest spread (the ML handover's ``run_best_axis``,
+    #: ported into `signal_pipeline.dart`), so this records which one actually carried the signal.
+    #:
+    #: Worth storing rather than discarding: a run of captures that only ever worked on ``x`` is a
+    #: fact about how the phone is being held, and it is the difference between fixing an
+    #: instruction and re-deriving a signal chain. Optional, so an older handset that does not send
+    #: it still submits.
+    scg_axis: Literal["x", "y", "z"] | None = None
+
 
 class SessionSubmit(TeraModel):
     """POST /v1/sessions body.

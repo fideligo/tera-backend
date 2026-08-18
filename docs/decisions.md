@@ -1768,3 +1768,27 @@ stops possession of a token becoming a permanent takeover.
 **A wrong current password is 403, not 401.** The handset treats a 401 as a dead session and signs
 the patient out; answering a mistyped form field that way would be actively wrong. 403 says the
 request was refused and the app shows it against the field.
+
+## `quality.scg_axis` — which accelerometer axis carried the signal
+
+The handset now tries all three accelerometer axes and keeps whichever passes its gate with the
+tightest PTT spread, ported from `run_best_axis` in the ML team's `contract.py`. Before this it read
+Z and nothing else, while X and Y sat unused in the same capture.
+
+`SessionQuality` gained an optional `scg_axis` to receive it. Worth a field rather than a discarded
+local: the aortic-valve signature sits on the axis normal to the chest wall, which axis that is
+depends on how the patient held the phone, and a run of captures that only ever worked on X is a
+fact about how the phone is being held. That is the difference between fixing an instruction and
+re-deriving a signal chain.
+
+Optional, so a handset that does not send it still submits. `Literal["x", "y", "z"]`, so a typo is
+a 422 rather than a value nobody can query.
+
+**The Flutter test caught this before a device would have.** `QualityMetrics` sets
+`extra="forbid"`, so a key added on the phone without being added here is a 422 on *every* submit —
+`signal_pipeline_test.dart` asserts the emitted quality block carries nothing the schema would
+refuse, and it failed the moment the axis was added on the handset side alone.
+
+Nothing else about the ML handover reached the backend: the chain runs on the handset (invariant 2),
+so what crosses the wire is still one derived interval per beat and a quality block. The full
+reasoning is in `tera-mobile/docs/decisions.md`.
