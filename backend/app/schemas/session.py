@@ -44,6 +44,21 @@ class SessionQuality(TeraModel):
     dropped_frame_pct: float = Field(ge=0, le=100)
     snr_db: float = Field(ge=-100, le=100)
     motion_index: float = Field(ge=0, le=1, description="0 is still, 1 is unusable movement.")
+    #: Cross-stream timing, milliseconds.
+    #:
+    #: The handset places the accelerometer and the camera on one in-process clock and reports how
+    #: far the two drifted apart across the capture: the skew at the end minus the skew at the
+    #: start, so a constant offset between the streams cancels and only a *growing* one is left.
+    #: That is the part that matters — a fixed lag cancels out of a change in transit time, a
+    #: growing one corrupts every interval by an amount that increases through the minute.
+    #:
+    #: Optional because it is measurable only when both streams produced at least two samples, and
+    #: bounded because the field is worth nothing at large magnitudes but a 422 would discard the
+    #: whole session (invariant 3). The handset clamps to these bounds for that reason.
+    #:
+    #: Earlier this carried the profiler's realtime-minus-uptime separation. No production row was
+    #: ever written with that meaning: the patient app cannot measure it — it needs both platform
+    #: clocks read at delivery — and it passed nothing at all.
     clock_offset_ms: float | None = Field(default=None, ge=-10_000, le=10_000)
 
     #: Which accelerometer axis the intervals were derived from: ``z``, ``x`` or ``y``.
