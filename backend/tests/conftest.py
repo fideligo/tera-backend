@@ -187,12 +187,35 @@ def patient_user(db: Session, patient: Patient) -> AppUser:
 
 
 @pytest.fixture
-def episode(db: Session, patient: Patient, clinician: AppUser) -> MonitoringEpisode:
+def episode_with_pinned_beat_floor(
+    db: Session, patient: Patient, clinician: AppUser
+) -> MonitoringEpisode:
+    """An episode that overrides the beat floor, for testing that the override still wins."""
     row = MonitoringEpisode(
         patient_id=patient.id,
         reviewing_clinician_id=clinician.id,
         started_at=datetime.now(tz=timezone.utc) - timedelta(days=28),
         protocol_params={"deviation_k": 2, "min_beat_count": 30, "persistence_window_hours": 48},
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+@pytest.fixture
+def episode(db: Session, patient: Patient, clinician: AppUser) -> MonitoringEpisode:
+    row = MonitoringEpisode(
+        patient_id=patient.id,
+        reviewing_clinician_id=clinician.id,
+        started_at=datetime.now(tz=timezone.utc) - timedelta(days=28),
+        # **No `min_beat_count` here, deliberately.** It used to pin 30, which meant every ingest
+        # test ran against a hard-coded floor while the config default moved underneath them — so
+        # lowering `min_usable_beats` to 12 passed the whole suite and still 422'd a real capture
+        # with 17 beats. A fixture that restates a default is a fixture that hides a change to it.
+        #
+        # The override path is exercised by `episode_with_pinned_beat_floor` below, which is where
+        # a per-episode value belongs.
+        protocol_params={"deviation_k": 2, "persistence_window_hours": 48},
     )
     db.add(row)
     db.commit()

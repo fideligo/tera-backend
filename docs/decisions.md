@@ -2060,3 +2060,57 @@ The log names which stream was suppressed, so the next capture answers it.
 Standing caution, unchanged and now more pointed: `maxPttSdMs` is at 45 against a reference figure
 of 10, and the cross-sensor floor is at 10 bpm against EC13's 5. This commit tightens one bound and
 removes another check. The set should be reviewed together once there is a capture that passes.
+
+## The 422 that survived lowering the threshold
+
+Reported as "we forgot to lower `min_usable_beats` on the FastAPI side". It had been lowered, in
+`3ad0712`, and `config.py` reads 12. The 422 still said 30.
+
+    n_beats_usable: is 17, below the minimum of 30 for a completed session
+
+`protocol.min_beat_count(episode, settings)` reads `monitoring_episode.protocol_params` **first** and
+only falls back to the setting. That is BUILD_SPEC 4.1's per-episode override working exactly as
+specified — and `seed_demo.py` wrote a literal `"min_beat_count": 30` into every episode it created,
+so the seeded episode silently outranked the config. Lowering the default was real and changed
+nothing for the only episode anyone was capturing against.
+
+**Two copies of the default, and both outranked it.** The second was this suite's own `episode`
+fixture, which pinned 30 as well. That is why 393 backend tests passed while a real capture was
+refused: every ingest test was measured against a hard-coded floor that the config could no longer
+move. `test_min_beat_count_is_configuration` — the invariant 10 test, whose entire subject is that
+this number is configurable — asserted "20 beats is below the default floor of 30". A test for
+invariant 10 that hard-codes the value it claims is configurable proves the opposite.
+
+### What was changed
+
+  * `seed_demo.py` reads `settings.deviation.min_usable_beats` instead of restating it. The key
+    stays, so the demo still exercises the override path; it just no longer duplicates the default.
+  * The `episode` fixture no longer sets `min_beat_count` at all. A new
+    `episode_with_pinned_beat_floor` fixture carries the override, which is where a per-episode
+    value belongs, and one test uses it to prove the override still wins.
+  * `test_min_beat_count_is_configuration` now reads the configured value and works relative to it.
+  * **Migration `0015_realign_episode_beat_floor`** rewrites `min_beat_count` in existing episodes.
+    Fixing the seed only helps episodes created afterwards; the rows already in `tera_pgdata` and
+    anything already deployed still carried 30, which is the half a code change cannot reach. It
+    runs on `alembic upgrade head`, which the Dockerfile's `CMD` already does on start.
+
+    Only the stale literal is touched — rows whose value is exactly 30 — so an episode where a
+    clinician deliberately set 30 is left alone. `monitoring_episode` is deliberately absent from
+    `APPEND_ONLY_TABLES`: protocol parameters are configuration a clinician may tune, not a clinical
+    measurement, so this is an ordinary update and not a guard being worked around.
+
+Verified against the live database: the seeded episode moved 30 to 12, and the nineteen episodes
+created through registration carry no `min_beat_count` at all and were already resolving to the
+setting.
+
+### The regression tests
+
+`test_a_seventeen_beat_session_is_accepted` posts the reported payload. `test_the_floor_is_still_a_floor`
+keeps 8 beats refused. `test_a_per_episode_override_still_wins` proves the feature is intact. And
+`test_the_seed_does_not_restate_the_beat_floor` reads `seed_demo.py` as text and fails if the literal
+comes back — the seeder needs a database to run, but this is really a fact about the file: a default
+belongs in one place.
+
+### Counts
+
+397 backend tests (393 before). No handset change: the Flutter side was already correct.

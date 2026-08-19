@@ -287,7 +287,15 @@ def _bootstrap(
                 "interval_days": 7,
             },
             "deviation_k": 2,
-            "min_beat_count": 30,
+            # **Read from settings, never restated.** This was the literal 30, and it silently
+            # outranked the config: `protocol.min_beat_count` prefers `protocol_params` and only
+            # falls back to `settings.deviation.min_usable_beats`. So lowering the config default
+            # to 12 changed nothing for the seeded episode, and a real capture with 17 usable
+            # beats was 422'd by a number nobody had noticed was still here.
+            #
+            # A per-episode override is the right feature; duplicating the default into every
+            # seeded episode is not. The key stays so the demo still exercises the override path.
+            "min_beat_count": settings.deviation.min_usable_beats,
             "persistence_window_hours": 48,
         },
         synthetic=True,

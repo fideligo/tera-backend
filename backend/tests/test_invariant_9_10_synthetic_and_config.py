@@ -264,24 +264,37 @@ def test_thresholds_come_from_config_not_literals(
 def test_min_beat_count_is_configuration(
     client: TestClient, auth, db, episode, device_profile
 ) -> None:
-    """The usable-beat floor follows the per-episode setting."""
+    """The usable-beat floor follows configuration: the setting, then the per-episode override.
+
+    **Read against the configured default rather than a literal.** This asserted "20 beats is below
+    the default floor of 30", which was true only because the `episode` fixture pinned 30 in
+    `protocol_params`. When the setting moved to 12 the test kept passing, and so did the rest of
+    the suite, while a real 17-beat capture was refused on the handset's behalf. A test for
+    invariant 10 that hard-codes the number it is checking is configurable proves the opposite of
+    what it claims.
+    """
+    configured = get_settings().deviation.min_usable_beats
+    below = configured - 4
+    assert below > 0
+
     payload = make_session_payload(
-        episode=episode, device_profile=device_profile, n_beats=20,
-        ptt_ms=[250.0 + (i % 3) for i in range(20)],
+        episode=episode, device_profile=device_profile, n_beats=below,
+        ptt_ms=[250.0 + (i % 3) for i in range(below)],
     )
     response = post_session(client, auth, payload)
-    assert response.status_code == 422, "20 beats is below the default floor of 30"
-    assert "below the minimum of 30" in response.text
+    assert response.status_code == 422, f"{below} beats is below the configured floor"
+    assert f"below the minimum of {configured}" in response.text
 
+    # And the per-episode override outranks it, which is the feature `protocol_params` exists for.
     db.execute(
         sa.text("UPDATE monitoring_episode SET protocol_params = :p WHERE id = :id"),
-        {"p": '{"min_beat_count": 10}', "id": episode.id},
+        {"p": '{"min_beat_count": %d}' % (below - 1), "id": episode.id},
     )
     db.commit()
 
     payload = make_session_payload(
-        episode=episode, device_profile=device_profile, n_beats=20,
-        ptt_ms=[250.0 + (i % 3) for i in range(20)],
+        episode=episode, device_profile=device_profile, n_beats=below,
+        ptt_ms=[250.0 + (i % 3) for i in range(below)],
     )
     assert post_session(client, auth, payload).status_code == 201
 

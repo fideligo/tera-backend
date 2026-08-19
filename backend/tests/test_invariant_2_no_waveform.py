@@ -172,6 +172,78 @@ def test_ptt_ceiling_is_back_within_the_spec(
 
 
 @pytest.mark.invariant
+def test_a_seventeen_beat_session_is_accepted(
+    client: TestClient, auth, episode, device_profile
+) -> None:
+    """The capture that was 422'd, as reported from the handset.
+
+        API FAILED 422: n_beats_usable: is 17, below the minimum of 30 for a completed session.
+
+    `min_usable_beats` had already been lowered to 12 in `config.py`. The 30 came from
+    `monitoring_episode.protocol_params['min_beat_count']`, which `protocol.min_beat_count` reads
+    *before* falling back to settings — so the config change was real and had no effect on any
+    episode the seed had created.
+
+    Two places restated the default and both outranked it: `seed_demo.py` wrote a literal 30 into
+    every episode, and this suite's own `episode` fixture pinned 30 as well, which is why the whole
+    backend suite passed while a real capture was refused.
+    """
+    response = post_session(
+        client,
+        auth,
+        make_session_payload(
+            episode=episode,
+            device_profile=device_profile,
+            ptt_ms=[240.0] * 17,
+            n_beats=17,
+        ),
+    )
+    assert response.status_code in (200, 201), response.text
+
+
+@pytest.mark.invariant
+def test_the_floor_is_still_a_floor(
+    client: TestClient, auth, episode, device_profile
+) -> None:
+    """Lowering it to 12 is not removing it."""
+    response = post_session(
+        client,
+        auth,
+        make_session_payload(
+            episode=episode,
+            device_profile=device_profile,
+            ptt_ms=[240.0] * 8,
+            n_beats=8,
+        ),
+    )
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.invariant
+def test_a_per_episode_override_still_wins(
+    client: TestClient, auth, episode_with_pinned_beat_floor, device_profile
+) -> None:
+    """The override is the feature; duplicating the default into every episode was the bug.
+
+    An episode that deliberately pins 30 still gets 30 — that is BUILD_SPEC 4.1's
+    ``protocol_params`` working as specified, and nothing here weakens it.
+    """
+    response = post_session(
+        client,
+        auth,
+        make_session_payload(
+            episode=episode_with_pinned_beat_floor,
+            device_profile=device_profile,
+            ptt_ms=[240.0] * 17,
+            n_beats=17,
+        ),
+    )
+    assert response.status_code == 422, response.text
+    violations = response.json()["detail"]["violations"]
+    assert any("30" in v["message"] for v in violations), violations
+
+
+@pytest.mark.invariant
 def test_a_ceiling_still_exists(
     client: TestClient, auth, episode, device_profile
 ) -> None:

@@ -6,6 +6,8 @@ API behaviour.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.config import get_settings
@@ -292,6 +294,23 @@ def test_the_floor_matches_the_ml_reference() -> None:
     on ingest as `insufficient_beats` — a second, stricter gate behind the validated one.
     """
     assert get_settings().deviation.min_usable_beats == 12
+
+
+def test_the_seed_does_not_restate_the_beat_floor() -> None:
+    """The seeded episode must read the default, not copy it.
+
+    `seed_demo.py` wrote a literal `"min_beat_count": 30` into every episode it created, and
+    `protocol.min_beat_count` reads `protocol_params` before settings — so the seeded episode
+    silently outranked the config and a real 17-beat capture was 422'd by a number in a JSONB
+    column. Asserted as source text because running the seeder needs a database and this is really
+    a fact about the file: a default belongs in one place.
+    """
+    source = (
+        Path(__file__).resolve().parents[1] / "app" / "cli" / "seed_demo.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"min_beat_count": settings.deviation.min_usable_beats' in source
+    assert '"min_beat_count": 30' not in source
 
 
 def test_a_short_capture_still_produces_a_session_ptt(deviation_settings) -> None:
