@@ -2114,3 +2114,49 @@ belongs in one place.
 ### Counts
 
 397 backend tests (393 before). No handset change: the Flutter side was already correct.
+
+## The flaky redaction test, and why the assertion stayed
+
+CI failed on:
+
+    assert '173' not in '{"ts": "2026-08-19T17:10:35.489173+00:00" ...}'
+
+The marker turned up inside the log line's own microseconds. Measured rather than guessed: a
+three-digit marker collides with a rendered ISO timestamp about **0.4% of the time per line**, and
+across the four markers these tests use, roughly **1.6% per rendered line** — about one run in 250,
+not one in a million. It was going to happen again.
+
+**The assertion was not removed.** The suggestion was that the key-value asserts already prove the
+redaction, so the blanket check is safe to drop. They prove it for the six keys they name. The
+blanket check is the only thing covering a value leaking through a key nobody thought to name, or
+through the message body — which is the failure the test exists for, and the half of the scrubber's
+job (`extra=` fields by key, free text by pattern, exception messages dropped entirely) that named
+keys cannot reach.
+
+**The fix already existed, ten lines above it in the same file.** `find_leaked_markers` in
+`tests/helpers.py` walks the parsed document and skips leaves shaped like timestamps, UUIDs or hex
+ids, because a marker inside one of those is arithmetic rather than disclosure. Its own docstring
+records that an earlier version of this test was flaky on UUIDs — the same bug, already diagnosed
+once, for a different field. The neighbouring test was converted then; this one was missed.
+
+So both call sites now use it, and the check is **stricter** than what it replaced: it matches
+numerically as well as by substring, so a value rendered as `173.0` against a marker of `173` is
+caught where a plain substring missed it.
+
+`test_error_path_leakage.py` carried the identical latent flake with `MARKER_SYSTOLIC = 187`. Fixed
+at the same time rather than left to fail on its own week.
+
+`test_a_marker_inside_the_log_timestamp_is_not_a_leak` pins the exact failing timestamp —
+`LogRecord.created` is an ordinary attribute, so no new dependency and no frozen clock — and asserts
+three things: the marker really is present in the rendered line, the structural check correctly does
+not report it, and the same marker in a *non*-timestamp field is still caught. The last one is what
+stops this being a blunted check rather than a corrected one.
+
+Checked and left alone: `test_error_body_does_not_echo_beat_values` compares digits against a 422
+body, but that body is `{"detail", "violations":[{"field","message"}]}` built from `plausibility.py`,
+which references no id and no timestamp — there are no free-running digits for a marker to collide
+with.
+
+### Counts
+
+398 backend tests, up from 397.

@@ -524,9 +524,15 @@ def test_exception_summary_omits_the_message_but_keeps_the_frames() -> None:
             msg="boom", args=(), exc_info=sys.exc_info(),
         )
 
-    rendered = json.loads(RedactingJsonFormatter().format(record))
+    raw = RedactingJsonFormatter().format(record)
+    rendered = json.loads(raw)
 
     assert rendered["exception"]["type"] == "ValueError"
     assert rendered["exception"]["frames"], "frames are needed to find the fault"
-    assert str(MARKER_SYSTOLIC) not in json.dumps(rendered)
-    assert "out of range" not in json.dumps(rendered)
+
+    # Structural, not substring: this carried the same latent flake as its sibling in
+    # `test_timeline_and_logging.py` — a three-digit marker has roughly a 0.4% chance of appearing
+    # inside the log's own ISO timestamp, and 187 is as exposed as 173 was. Fixed here at the same
+    # time rather than left to fail on its own week.
+    leaks = find_leaked_markers(raw, (str(MARKER_SYSTOLIC), "out of range"))
+    assert not leaks, f"exception log contains leaked content: {leaks}"

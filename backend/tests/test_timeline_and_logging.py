@@ -265,7 +265,8 @@ def test_formatter_redacts_denied_fields_even_when_passed_deliberately() -> None
     record.nested = {"symptom_text": "chest pain", "session_id": "keep-me"}
     record.session_id = "keep-me-too"
 
-    rendered = json.loads(formatter.format(record))
+    raw = formatter.format(record)
+    rendered = json.loads(raw)
 
     assert rendered["systolic_mmhg"] == REDACTED
     assert rendered["ptt_ms"] == REDACTED
@@ -273,8 +274,64 @@ def test_formatter_redacts_denied_fields_even_when_passed_deliberately() -> None
     assert rendered["nested"]["symptom_text"] == REDACTED
     assert rendered["nested"]["session_id"] == "keep-me"
     assert rendered["session_id"] == "keep-me-too"
-    assert "173" not in json.dumps(rendered)
-    assert "chest pain" not in json.dumps(rendered)
+
+    # **Structurally, not by substring — the same reason the test above this one already does.**
+    #
+    # This asserted `"173" not in json.dumps(rendered)` and failed on
+    # `{"ts": "2026-08-19T17:10:35.489173+00:00"}`: the marker turned up inside the log's own
+    # microseconds. Measured, that is roughly a 0.4% chance per rendered line per three-digit
+    # marker — about one run in 250, not a coincidence anyone should wait to see twice.
+    #
+    # The key assertions above are not a substitute. They cover the six keys they name; the blanket
+    # check is what catches a value leaking through a key nobody thought to name, or through the
+    # message body, which is precisely the failure this test exists for. So the check stays and
+    # becomes structural: `find_leaked_markers` walks the parsed document and skips leaves that are
+    # shaped like timestamps, UUIDs or hex ids, because a marker inside one of those is arithmetic
+    # rather than disclosure.
+    #
+    # It is also stricter than what it replaces — it matches numerically, so a value rendered as
+    # `173.0` against a marker of `173` is caught, and a plain substring would have missed it.
+    leaks = find_leaked_markers(raw, ("173", "chest pain"))
+    assert not leaks, f"log output contains clinical value(s): {leaks}"
+
+
+def test_a_marker_inside_the_log_timestamp_is_not_a_leak() -> None:
+    """The exact collision that broke CI, pinned so the fix is checkable rather than believed.
+
+        assert '173' not in '{"ts": "2026-08-19T17:10:35.489173+00:00" ...}'
+
+    A three-digit marker inside a six-digit microsecond field is arithmetic, not disclosure. This
+    reproduces that timestamp deterministically — `LogRecord.created` is an ordinary attribute — and
+    asserts the structural check is unmoved by it while still catching a real leak in the same
+    document.
+    """
+    colliding = datetime(2026, 8, 19, 17, 10, 35, 489173, tzinfo=timezone.utc)
+
+    formatter = RedactingJsonFormatter()
+    record = logging.LogRecord(
+        name="test", level=logging.INFO, pathname=__file__, lineno=1,
+        msg="something_happened", args=(), exc_info=None,
+    )
+    record.created = colliding.timestamp()
+    record.systolic_mmhg = 173
+
+    raw = formatter.format(record)
+
+    # The premise: the marker really is present in the rendered line, inside the timestamp.
+    assert "173" in raw
+    assert "489173" in json.loads(raw)["ts"]
+
+    # And it is correctly not reported, because it is in a timestamp-shaped leaf.
+    assert find_leaked_markers(raw, ("173",)) == []
+
+    # The check has not simply been blunted: the same marker in a field that is *not* redacted is
+    # still caught, so this is skipping timestamps rather than skipping the number.
+    leaky = logging.LogRecord(
+        name="test", level=logging.INFO, pathname=__file__, lineno=1,
+        msg="reading was 173 over 109", args=(), exc_info=None,
+    )
+    leaky.created = colliding.timestamp()
+    assert find_leaked_markers(formatter.format(leaky), ("173",))
 
 
 def test_deny_list_covers_the_obvious_names() -> None:
