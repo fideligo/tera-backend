@@ -1962,3 +1962,101 @@ question this could not answer from the outside.
 Neither tuning is validated against real data — there is one capture, and both figures were chosen
 to admit it. That is a legitimate thing to do once and a bad habit to form. The dispersion ceiling
 is what stands between these and a wrong number, and it has not moved.
+
+## The second cluster, the yield gate, and a deviation retired
+
+### The mechanism was not next-cycle aliasing, and the correction is right anyway
+
+Reported as beat aliasing: the finger dropping beats (52 against a chest 68) causing chest beat N to
+pair with finger beat N+1 through the wide [80, 500] window.
+
+That cannot happen at 68 bpm, and the arithmetic is worth writing down because it is the rule for
+choosing this bound at all. A foot from the following cycle enters the window only when
+
+    cycle period <= pttMaxSeconds - pttMinSeconds
+
+At a 500 ms ceiling that is 420 ms, or 143 bpm. At 68 bpm the cycle is 882 ms and the next foot sits
+around 1122 ms after the chest beat — nowhere near the window. A dropped foot leaves its chest beat
+*unpaired*; it does not shift it onto the next one.
+
+**What the wide window does admit is a second cluster of over-long pairings**, which is what was
+actually observed and is a real defect: a chest beat whose own foot was dropped can reach some other
+unclaimed foot sitting in the 380-500 ms band, and enough of those form their own mode.
+
+**And the observation about Tukey is exactly right and is the important part.** `tukeyTrim` removes
+a few stragglers. It cannot remove a second cluster: when a substantial share of the values are
+shifted by a consistent amount, the interquartile range spans both groups, the fence widens to
+match, and nothing is dropped. A bimodal set defeats an IQR fence by construction. So the second
+mode has to be prevented at the pairing step — the trim was never going to reach it.
+
+### 0.38, and why that number specifically
+
+    0.38 - 0.08 = 0.30 s, and 60 / 0.30 = 200 bpm = maxBpm
+
+A beat faster than `maxBpm` is not treated as a beat at all, so at a 380 ms ceiling **no recording
+the chain accepts can have a cycle short enough to be paired across.** The window is structurally
+incapable of cross-cycle pairing rather than narrowly protected from it.
+
+The previous 500 ms was in fact protected too, and finding out how narrowly was the useful part of
+checking: 142.9 bpm against a plausibility ceiling of 140 is a **2.9 bpm margin**, resting on a
+coincidence between two constants that were set independently for unrelated reasons, one of which
+could be retuned by someone who has never read this. That is not a safeguard.
+
+380 also keeps almost all of the fiducial headroom the widening was for — backtracked AO mark,
+intersecting-tangent foot — while closing the band that produced the second mode. The floor stays at
+0.08.
+
+### The backend deviation is retired, not carried
+
+`ptt_max_ms` went back to BUILD_SPEC's **400**. It had been widened to 500 to stay in step with the
+handset; now that the handset pairs to 380, nothing a client can produce exceeds it, so the bound
+has no work to do above 400 and the deviation from the spec disappears entirely.
+
+Defence in depth is preserved by being no *tighter* than the client, not by matching it: 400 sits
+above 380 with room, so a legitimate session is never 422'd there. Both sides still assert the
+relationship, because a phone that accepts what the server refuses is the split that already cost us
+`min_usable_beats`.
+
+### The pair-yield gate no longer refuses
+
+The reference's `MIN_PAIR_YIELD = 0.50` asked that half the detected chest beats find a partner. A
+capture with 22 pairs from 68 chest beats failed it while clearing `minPairs` — and 22 intervals is a
+usable median by the reference's own figure of 12. The two checks answer different questions and the
+percentage one was overriding the absolute one.
+
+Removed rather than left unreachable. Passing whenever `n >= minPairs` — which the check above
+already guarantees — would have made the branch dead code that reads as a live safeguard.
+
+**What is given up.** A low yield is genuine evidence that the two streams are not seeing the same
+heart, and that the surviving pairs may be the wrong ones. That is no longer a refusal. Two things
+carry it instead: the payload submits `n_beats_total` and `n_beats_usable`, so the ratio is
+recoverable server-side and a 32% session is identifiable in the record; and `compute_confidence`
+scores on the absolute count, so a 22-beat session sits far below saturation and reports low
+confidence rather than passing silently. The constant is kept because the log now reports against it
+and says when a session is below it.
+
+### The finger refractory, split from the chest
+
+`harmonicRefractoryFractionPpg = 0.60`, against the chest's 0.75.
+
+The two streams see the same valve closure by different routes and not with the same prominence. On
+the chest, aortic closing is a mechanical event of comparable magnitude to opening, which is why
+0.75 of a beat is needed to clear it. At the fingertip it arrives as the dicrotic notch — a
+secondary inflection on a decaying pulse, at roughly 45% of the cycle — so 0.60 covers it with room.
+
+The cost of the longer figure is what motivated the split: a refractory is a hard floor on the
+shortest interval the detector may report, so 0.75 of the median period silently deletes any
+genuinely short beat, and every deleted beat is one the pairing step cannot use.
+
+**Worth checking against the next log rather than assumed.** In both captures so far the finger's
+second pass reported `finger=false` — it never fired — so if it is still not firing, this constant
+is not what was dropping feet, and the base refractory (`fs * 60 / maxBpm`, 300 ms) is what applies.
+The log names which stream was suppressed, so the next capture answers it.
+
+### Counts
+
+440 patient tests (436 before), 393 backend, 0 analyzer errors.
+
+Standing caution, unchanged and now more pointed: `maxPttSdMs` is at 45 against a reference figure
+of 10, and the cross-sensor floor is at 10 bpm against EC13's 5. This commit tightens one bound and
+removes another check. The set should be reviewed together once there is a capture that passes.

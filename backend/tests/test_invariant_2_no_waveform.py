@@ -132,34 +132,39 @@ def test_implausible_ptt_rejected_with_422(
 
 
 @pytest.mark.invariant
-def test_ptt_ceiling_is_the_recorded_deviation_from_the_spec(
+def test_ptt_ceiling_is_back_within_the_spec(
     client: TestClient, auth, episode, device_profile
 ) -> None:
-    """BUILD_SPEC 4.4 says 80-400 ms. We run 80-500, deliberately.
+    """BUILD_SPEC 4.4 says 80-400 ms, and after a brief deviation to 500 we are back inside it.
 
-    The physiology is not in dispute; the fiducials are. The handset marks aortic opening by
-    backtracking to 82% of the envelope rise and marks the PPG foot by intersecting tangents. Both
-    are the ML reference's own definitions, both are correct, and both place their mark earlier —
-    so the interval between them is systematically longer than the textbook AO-to-foot figure the
-    80-400 bound was written against. A real seated capture was losing pairs to the ceiling.
+    The deviation was real: the handset's fiducials lengthen the measured interval, because aortic
+    opening is backtracked to 82% of the envelope rise and the PPG foot is placed by intersecting
+    tangents, both earlier than the marks the 80-400 figure was written against. A seated capture
+    was losing pairs to the ceiling.
 
-    Asserted rather than left implicit: the next reader sees a decision, not a discrepancy, and a
-    further drift has to be argued for. It must also stay in step with `pttMaxMs` on the handset —
-    a phone that accepts what the server 422s is the split that already cost us
-    `min_usable_beats`, and nothing but this test and the decisions entry enforces it.
+    It was retired rather than left standing. The handset has since tightened its own pairing
+    ceiling to 380 ms for a better reason — at 380 the window cannot reach the following cardiac
+    cycle at any rate the chain accepts — so nothing a client can now produce exceeds 380 and this
+    bound has no work to do above 400.
+
+    Still asserted, because the two must not silently drift apart: a phone that accepts what the
+    server 422s is the split that already cost us `min_usable_beats`, and nothing but this test and
+    the decisions entry enforces it.
     """
     settings = get_settings().plausibility
-    assert settings.ptt_max_ms == 500.0
+    assert settings.ptt_max_ms == 400.0
     assert settings.ptt_min_ms == 80.0
 
-    # And it is accepted end to end, not merely configured.
+    # The handset pairs to 380 ms, so this sits above anything it can produce and a legitimate
+    # session is never 422'd here. Defence in depth is being no *tighter* than the client, not
+    # matching it.
     response = post_session(
         client,
         auth,
         make_session_payload(
             episode=episode,
             device_profile=device_profile,
-            ptt_ms=[450.0] * 40,
+            ptt_ms=[375.0] * 40,
             n_beats=40,
         ),
     )
