@@ -126,7 +126,20 @@ class Calibration(UuidPkMixin, SyntheticMixin, Base):
     __table_args__ = (
         # BUILD_SPEC 4.1 — both required at database level.
         sa.CheckConstraint("baseline_sd_ms > 0", name="ck_calibration_baseline_sd_positive"),
-        sa.CheckConstraint("n_sessions >= 3", name="ck_calibration_min_sessions"),
+        # **1, not 3, and the difference is which layer owns a clinical threshold.**
+        #
+        # This was `>= 3`, from BUILD_SPEC 4.3's "at least three accepted calibration sessions".
+        # `min_calibration_sessions` has been configuration set to 1 since the product committed to
+        # single-point calibration — and this constraint made that value unreachable, three layers
+        # below where anyone would look for it. A calibration from one session was refused by the
+        # database whatever the setting said.
+        #
+        # Invariant 10: clinical thresholds are configuration with documented defaults, never
+        # hard-coded in logic. A CHECK pinning the policy figure is that rule broken in the one
+        # place a config change cannot reach. What belongs here is the *structural* floor — a
+        # calibration derived from no sessions is not a weak baseline, it is not a baseline — and
+        # the policy figure stays in `config.py` where it can be tuned per deployment.
+        sa.CheckConstraint("n_sessions >= 1", name="ck_calibration_min_sessions"),
         # Supersession bookkeeping must be internally consistent: a superseded row names its
         # successor and when it happened; an active row does neither.
         sa.CheckConstraint(

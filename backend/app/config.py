@@ -39,6 +39,21 @@ class DeviationSettings(BaseSettings):
     # while a negative k is meaningless and would invert the comparison silently.
     deviation_k: float = Field(default=2.0, gt=0.0)
 
+    # The smallest PTT change this product is willing to call meaningful, milliseconds.
+    #
+    # Source: the ML reference's `TREND_MIN_DELTA_MS`, which the proposal derives as the bottom of
+    # the 10-50 ms clinically meaningful band. It is the threshold used when there is not yet
+    # enough baseline history to estimate the patient's own between-session spread — see
+    # `compute_baseline`.
+    #
+    # The reference is explicit about what must *not* be substituted here: "do NOT use the
+    # within-session beat-to-beat SD. That is a different variance. Beat-to-beat scatter says how
+    # noisy one recording was; what matters for a trend is how much the MEDIAN moves between days,
+    # which also absorbs posture, time of day and finger temperature." Using the per-beat figure
+    # (4-7 ms, so a 2-sigma threshold of 8-14 ms) would silently discard the bottom half of the
+    # band this constant defines.
+    trend_min_delta_ms: float = Field(default=10.0, gt=0.0)
+
     # BUILD_SPEC 4.3: "a repeat session within the configured window". 48 h is chosen so a
     # patient who measures once or twice daily has a realistic chance of producing the repeat
     # without the pair spanning so much time that they describe different physiological states.

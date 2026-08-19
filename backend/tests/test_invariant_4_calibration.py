@@ -14,6 +14,7 @@ import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.models import Calibration, CalibrationStatus, CameraHardwareLevel, DeviceProfile
 from app.models import QualifiedStatus, TimestampSource, TrendEstimate
 from app.services import calibration as calibration_service
@@ -266,6 +267,67 @@ def _three_calibration_sessions(
 
 
 @pytest.mark.invariant
+def test_one_session_establishes_a_calibration(
+    client: TestClient, auth, db, episode, device_profile, cuff_reading, patient
+) -> None:
+    """Single-point calibration, which is what the patient is actually asked to do.
+
+    The route refused this with "a baseline needs at least 2 calibration sessions to have any
+    spread at all, got 1", which blocked the whole product on hardware: the app says "take one
+    cuff reading", `min_calibration_sessions` is 1, and the mmHg estimate never needed a spread —
+    `pressure_estimate` fixes the intercept from one anchor and takes the slope from population
+    coefficients (invariant 1). Only the deviation engine wanted an SD.
+    """
+    payload = make_session_payload(
+        episode=episode,
+        device_profile=device_profile,
+        started_at=datetime.now(tz=timezone.utc) - timedelta(days=20),
+        ptt_target_ms=250.0,
+    )
+    assert post_session(client, auth, payload).status_code == 201
+
+    response = client.post(
+        "/v1/calibrations",
+        headers=auth,
+        json={
+            "patient_id": str(patient.id),
+            "device_profile_id": str(device_profile.id),
+            "reference_cuff_reading_id": str(cuff_reading.id),
+            "session_ids": [payload["session_id"]],
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+
+    assert body["status"] == "active"
+    assert body["n_sessions"] == 1
+    assert body["baseline_mean_ms"] == pytest.approx(250.0, abs=2.0)
+
+    # The spread is the clinical floor expressed as a sigma, not an observation of this patient.
+    # `n_sessions == 1` is what tells a reader which of the two it is.
+    settings = get_settings().deviation
+    assert body["baseline_sd_ms"] == pytest.approx(settings.trend_min_delta_ms / 2.0)
+
+
+@pytest.mark.invariant
+def test_no_sessions_is_still_refused(
+    client: TestClient, auth, db, episode, device_profile, cuff_reading, patient
+) -> None:
+    """One is a policy. None is nothing to anchor to, and still a 422."""
+    response = client.post(
+        "/v1/calibrations",
+        headers=auth,
+        json={
+            "patient_id": str(patient.id),
+            "device_profile_id": str(device_profile.id),
+            "reference_cuff_reading_id": str(cuff_reading.id),
+            "session_ids": [],
+        },
+    )
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.invariant
 def test_calibration_is_bound_to_one_device(
     client: TestClient, auth, db, episode, patient, device_profile, cuff_reading
 ) -> None:
@@ -367,10 +429,25 @@ def test_calibration_rejects_a_client_supplied_baseline(
 
 
 @pytest.mark.invariant
-def test_calibration_requires_at_least_three_sessions(
+def test_the_session_floor_lives_in_configuration_not_in_the_schema(
     client: TestClient, auth, episode, device_profile, cuff_reading, patient
 ) -> None:
-    """Fewer than three sessions is refused before it can reach the database CHECK."""
+    """**This test asserted the opposite, and the thing it asserted was the bug.**
+
+    It read "fewer than three sessions is refused before it can reach the database CHECK", and that
+    CHECK was `n_sessions >= 3` from BUILD_SPEC 4.3. Meanwhile `min_calibration_sessions` had been
+    configuration set to 1 since the product committed to single-point calibration. The constraint
+    made the configured value unreachable three layers down, so a calibration from one session was
+    refused by the database whatever the setting said — and invariant 10 exists precisely to stop a
+    clinical threshold living somewhere a config change cannot reach.
+
+    What is asserted now is the property that was intended: the floor is the *setting*, and the
+    schema carries only the structural minimum.
+    """
+    settings = get_settings().deviation
+    assert settings.min_calibration_sessions == 1
+
+    # A calibration from exactly the configured minimum is accepted end to end.
     payload = make_session_payload(episode=episode, device_profile=device_profile)
     assert post_session(client, auth, payload).status_code == 201
 
@@ -384,7 +461,8 @@ def test_calibration_requires_at_least_three_sessions(
             "session_ids": [payload["session_id"]],
         },
     )
-    assert response.status_code == 422
+    assert response.status_code == 201, response.text
+    assert response.json()["n_sessions"] == settings.min_calibration_sessions
 
 
 @pytest.mark.invariant

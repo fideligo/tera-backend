@@ -100,15 +100,69 @@ def test_the_configured_minimum_is_visible(deviation_settings) -> None:
     assert deviation_settings.min_calibration_sessions == 1
 
 
-def test_one_session_is_refused_however_low_the_minimum_goes(deviation_settings) -> None:
-    """A single value has no standard deviation, so this is arithmetic and not policy.
+def test_one_session_yields_a_provisional_baseline(deviation_settings) -> None:
+    """**This used to refuse, and refusing was the wrong answer to a correct observation.**
 
-    Without the guard, `min_calibration_sessions = 1` reaches `statistics.stdev` with one value
-    and raises `StatisticsError` — an unhandled exception, which is a 500 to whoever asked. It
-    refuses the same way every other unusable baseline does instead.
+    A single value genuinely has no sample standard deviation. But `min_calibration_sessions` is 1
+    because single-point calibration is the product — the patient is told to take one cuff reading
+    — and the estimate path never needed a spread: `pressure_estimate` fixes the intercept from one
+    anchor and takes the slope from population coefficients (invariant 1). Only the deviation
+    engine wanted an SD, and its absence was blocking a mmHg estimate that did not depend on it.
+
+    The ML reference's `classify_trend` states the fallback: "a fixed floor at the bottom of that
+    band until enough baseline sessions exist to estimate the between-session SD properly, then
+    2 sigma of THAT."
     """
-    with pytest.raises(ValueError, match="at least 2"):
-        compute_baseline([250.0], deviation_settings)
+    baseline = compute_baseline([250.0], deviation_settings)
+
+    assert baseline.mean_ms == pytest.approx(250.0)
+    assert baseline.n_sessions == 1
+    assert baseline.sd_is_provisional is True
+
+
+def test_the_provisional_spread_reproduces_the_reference_floor(deviation_settings) -> None:
+    """`k * sd` must equal the clinically meaningful minimum, to the millisecond.
+
+    That is the whole justification for the number: it is not a guess at this patient's spread, it
+    is the reference's fixed threshold expressed as the sigma that produces it.
+    """
+    baseline = compute_baseline([250.0], deviation_settings)
+    threshold_ms = deviation_settings.deviation_k * baseline.sd_ms
+
+    assert threshold_ms == pytest.approx(deviation_settings.trend_min_delta_ms)
+
+    # And it behaves as a threshold: just inside is stable, just outside is a deviation.
+    inside, _ = classify_direction(250.0 - 9.0, baseline, deviation_settings.deviation_k)
+    outside, _ = classify_direction(250.0 - 11.0, baseline, deviation_settings.deviation_k)
+    assert inside is TrendDirection.STABLE
+    assert outside is TrendDirection.INCREASE
+
+
+def test_the_provisional_spread_is_not_the_beat_to_beat_scatter(deviation_settings) -> None:
+    """The substitution the reference explicitly forbids.
+
+    "Do NOT use the within-session beat-to-beat SD here. That is a different variance." Per-beat
+    scatter is 4-7 ms on a good capture and our own ceiling admits up to 45; either would produce
+    a threshold that silently discards the bottom of the 10-50 ms clinically meaningful band.
+
+    Pinned as a relationship rather than a number: the provisional sigma comes from the clinical
+    floor and from nothing measured inside a recording.
+    """
+    baseline = compute_baseline([250.0], deviation_settings)
+    assert baseline.sd_ms == pytest.approx(deviation_settings.trend_min_delta_ms / 2.0)
+
+
+def test_a_real_spread_is_used_as_soon_as_there_is_one(deviation_settings) -> None:
+    """The fallback is a floor for the first session, not a permanent substitute."""
+    baseline = compute_baseline([246.0, 250.0, 254.0], deviation_settings)
+    assert baseline.sd_is_provisional is False
+    assert baseline.sd_ms == pytest.approx(4.0)
+
+
+def test_no_sessions_is_still_refused(deviation_settings) -> None:
+    """One is a policy; none is nothing to anchor to."""
+    with pytest.raises(ValueError):
+        compute_baseline([], deviation_settings)
 
 
 def test_baseline_uses_sample_standard_deviation(deviation_settings) -> None:

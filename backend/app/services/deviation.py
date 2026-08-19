@@ -38,6 +38,14 @@ class Baseline:
     sd_ms: float
     n_sessions: int
 
+    #: True when [sd_ms] is the clinical floor standing in for a spread that could not be measured.
+    #:
+    #: A single calibration session has no between-session variation to estimate from. The figure
+    #: in [sd_ms] is then a policy threshold wearing the units of a spread, not an observation of
+    #: this patient, and anything reporting "standard deviations of your own baseline" to a reader
+    #: needs to be able to tell the difference.
+    sd_is_provisional: bool = False
+
 
 @dataclass(frozen=True)
 class DeviationResult:
@@ -112,18 +120,32 @@ def compute_baseline(session_ptt_values: list[float], settings: DeviationSetting
             f"sessions, got {len(session_ptt_values)}"
         )
 
-    # Two is the floor of the *arithmetic*, not of the policy.
+    # **One session: a provisional spread, not a refusal.**
     #
-    # `min_calibration_sessions` is configuration and has been lowered to 1, which is below what
-    # a sample standard deviation is defined for: `statistics.stdev` raises `StatisticsError` on a
-    # single value, and an unhandled exception here is a 500 rather than a refusal. This states the
-    # same refusal the caller already handles, in the same shape, so lowering the setting further
-    # cannot turn a configuration choice into a crash. It does not raise the configured minimum —
-    # a policy of 1 stays a policy of 1, it simply fails cleanly where it is impossible.
-    if len(session_ptt_values) < 2:
-        raise ValueError(
-            "a baseline needs at least 2 calibration sessions to have any spread at all, "
-            f"got {len(session_ptt_values)}"
+    # A single value has no sample standard deviation — `statistics.stdev` raises on it — and this
+    # used to refuse for that reason. Refusing was the wrong answer to the right observation. The
+    # arithmetic really is undefined, but `min_calibration_sessions` is 1 *because single-point
+    # calibration is the product*: the patient is told "take one cuff reading", and the estimate
+    # path was already built for it — `pressure_estimate` fixes the intercept from one anchor and
+    # takes the slope from population coefficients (invariant 1). Only the deviation engine needed
+    # a spread, and it was blocking a mmHg estimate that never depended on one.
+    #
+    # The ML reference states the fallback directly, in `classify_trend`: "a fixed floor at the
+    # bottom of that band until enough baseline sessions exist to estimate the between-session SD
+    # properly, then 2 sigma of THAT." Its threshold is `max(min_delta_ms, 2.0 * sd)`.
+    #
+    # So the floor is expressed here as the sigma that reproduces it. At the default `deviation_k`
+    # of 2, `k * (trend_min_delta_ms / 2)` is exactly `trend_min_delta_ms`, which is the
+    # reference's floor to the millisecond; an episode that sets a stricter k gets a
+    # proportionally stricter floor, which is the behaviour that constant is for.
+    #
+    # It is flagged, because it is a threshold wearing the units of an observation.
+    if len(session_ptt_values) == 1:
+        return Baseline(
+            mean_ms=float(session_ptt_values[0]),
+            sd_ms=settings.trend_min_delta_ms / 2.0,
+            n_sessions=1,
+            sd_is_provisional=True,
         )
 
     mean_ms = statistics.fmean(session_ptt_values)

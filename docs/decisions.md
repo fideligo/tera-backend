@@ -2160,3 +2160,82 @@ with.
 ### Counts
 
 398 backend tests, up from 397.
+
+## Single-point calibration, which was blocked in three places
+
+    calibration could not be established — session_ids: a baseline needs at least 2 calibration
+    sessions to have any spread at all, got 1
+
+### The slope was never the problem
+
+The brief asks for a population default slope with the single point fixing the intercept. That is
+what `pressure_estimate.py` already does, and has since invariant 1 was rewritten on 14 August:
+"One calibration point fixes the **intercept**. It cannot fix the **slope**, which comes from
+population coefficients." It takes `baseline_ptt_ms` — the anchor mean — and never touches a
+standard deviation.
+
+So the mmHg estimate was already single-point capable and was being blocked by a figure it does not
+consume. The spread belongs to the **deviation engine**: `classify_direction` divides the change by
+`baseline.sd_ms` to express it in the patient's own units, and that is the only consumer.
+
+### Three floors, and the config was the only one anyone had moved
+
+  1. `min_calibration_sessions` — configuration, already 1, with a comment reading "single-point
+     calibration is the product".
+  2. `compute_baseline` — raised below 2, because a sample standard deviation is undefined for one
+     value. Written deliberately, to fail cleanly rather than let `statistics.stdev` throw a 500.
+  3. **`ck_calibration_min_sessions`: `n_sessions >= 3`** — a database CHECK, from BUILD_SPEC 4.3's
+     "at least three accepted calibration sessions".
+
+The third is the one worth dwelling on. It made the configured value **unreachable**, three layers
+below where anyone would look, and it never surfaced because the service raised first. Invariant 10
+exists precisely to stop a clinical threshold living somewhere a config change cannot reach, and a
+CHECK pinning the policy figure is that rule broken in the least visible place available.
+
+Migration `0016_calibration_single_point` relaxes it to `n_sessions >= 1`: the *structural* floor,
+because a calibration derived from no sessions is not a weak baseline, it is not a baseline. The
+policy figure stays in `config.py`. Existing rows are unaffected — every calibration already stored
+has three sessions — so this only widens what may be written next.
+
+### What replaces the spread, taken from the reference rather than invented
+
+`classify_trend` in the ML reference states the fallback in its own docstring:
+
+> a fixed floor at the bottom of that band until enough baseline sessions exist to estimate the
+> between-session SD properly, then 2 sigma of THAT
+
+Its threshold is `max(min_delta_ms, 2.0 * between_session_sd)`. So `compute_baseline` now returns,
+for one session, a baseline whose `sd_ms` is `trend_min_delta_ms / 2` — the sigma that reproduces
+that floor. At the default `deviation_k` of 2 the threshold is exactly 10 ms, the bottom of the
+proposal's clinically meaningful band, and an episode configured with a stricter k gets a
+proportionally stricter floor.
+
+`trend_min_delta_ms` is new configuration with its source recorded, as invariant 10 requires.
+
+**The reference also names the substitution that must not be made**, and it is the tempting one:
+
+> do NOT use the within-session beat-to-beat SD here. That is a different variance. Beat-to-beat
+> scatter says how noisy one recording was; what matters for a trend is how much the MEDIAN moves
+> between days, which also absorbs posture, time of day and finger temperature.
+
+Per-beat scatter is 4-7 ms on a good capture and our own ceiling now admits 45; either would produce
+a threshold that silently discards the bottom half of the band. Pinned by a test as a relationship
+to the clinical floor rather than as a number.
+
+### The honesty problem, and how it is carried
+
+`magnitude_sd` is documented as "standard deviations of this patient's own baseline". With one
+session it is not that — it is a policy threshold wearing the units of an observation. `Baseline`
+therefore carries `sd_is_provisional`, and `calibration.n_sessions` is already stored and returned,
+so a reader can tell which of the two they are looking at.
+
+Making `magnitude_sd` nullable was the alternative. Rejected: the column is `NOT NULL` with a CHECK,
+three response schemas type it as non-optional, and widening all of that during a competition week
+is a large change to express something `n_sessions == 1` already says.
+
+### Counts
+
+404 backend tests, up from 398. One intermittent failure was seen once in a full run and not on
+re-run or in isolation: `test_repeated_failed_logins_are_refused_with_retry_after`, which shares a
+process-global rate limiter with every other test that authenticates. Pre-existing order coupling,
+unrelated to this change, and not fixed here — noted so it is not mistaken for a new flake.
