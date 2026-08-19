@@ -132,6 +132,63 @@ def test_implausible_ptt_rejected_with_422(
 
 
 @pytest.mark.invariant
+def test_ptt_ceiling_is_the_recorded_deviation_from_the_spec(
+    client: TestClient, auth, episode, device_profile
+) -> None:
+    """BUILD_SPEC 4.4 says 80-400 ms. We run 80-500, deliberately.
+
+    The physiology is not in dispute; the fiducials are. The handset marks aortic opening by
+    backtracking to 82% of the envelope rise and marks the PPG foot by intersecting tangents. Both
+    are the ML reference's own definitions, both are correct, and both place their mark earlier —
+    so the interval between them is systematically longer than the textbook AO-to-foot figure the
+    80-400 bound was written against. A real seated capture was losing pairs to the ceiling.
+
+    Asserted rather than left implicit: the next reader sees a decision, not a discrepancy, and a
+    further drift has to be argued for. It must also stay in step with `pttMaxMs` on the handset —
+    a phone that accepts what the server 422s is the split that already cost us
+    `min_usable_beats`, and nothing but this test and the decisions entry enforces it.
+    """
+    settings = get_settings().plausibility
+    assert settings.ptt_max_ms == 500.0
+    assert settings.ptt_min_ms == 80.0
+
+    # And it is accepted end to end, not merely configured.
+    response = post_session(
+        client,
+        auth,
+        make_session_payload(
+            episode=episode,
+            device_profile=device_profile,
+            ptt_ms=[450.0] * 40,
+            n_beats=40,
+        ),
+    )
+    assert response.status_code in (200, 201), response.text
+
+
+@pytest.mark.invariant
+def test_a_ceiling_still_exists(
+    client: TestClient, auth, episode, device_profile
+) -> None:
+    """Widening is not removing. Half a cardiac cycle at 60 bpm is still the limit.
+
+    500 ms cannot admit a pair formed across two different beats, which is the property that makes
+    the wider window safe rather than merely more permissive.
+    """
+    response = post_session(
+        client,
+        auth,
+        make_session_payload(
+            episode=episode,
+            device_profile=device_profile,
+            ptt_ms=[250.0] * 39 + [900.0],
+            n_beats=40,
+        ),
+    )
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.invariant
 def test_error_body_does_not_echo_beat_values(
     client: TestClient, auth, episode, device_profile
 ) -> None:

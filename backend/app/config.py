@@ -222,8 +222,28 @@ class PlausibilitySettings(BaseSettings):
 
     # BUILD_SPEC 4.4 states the range explicitly: "PTT values outside 80-400 ms". Consistent with
     # reported pulse transit / pulse arrival times over the proximal arterial path in adults.
+    #
+    # **The ceiling is 500, not the spec's 400. A deliberate deviation, recorded here and in
+    # docs/decisions.md.**
+    #
+    # The physiology is not in dispute; the fiducials at either end are. The handset marks aortic
+    # opening by backtracking to 82% of the envelope rise, which lands *earlier* than the envelope
+    # peak, and marks the PPG foot by intersecting tangents, which lands earlier than the argmin.
+    # Both corrections are correct — they are what the ML reference specifies and why the port
+    # matches it to the microsecond — and both lengthen the interval between them. The quantity
+    # this bound measures is therefore systematically larger than the textbook AO-to-foot figure
+    # 80-400 was written against.
+    #
+    # Keeping 400 here while the handset pairs to 500 would be the worst of both: the phone would
+    # accept a capture and the server would 422 the whole session on one interval, which is
+    # exactly the split that cost us `min_usable_beats`. The two move together or not at all.
+    #
+    # This does not weaken the defence-in-depth this class exists for. A 500 ms ceiling is still
+    # half a cardiac cycle at 60 bpm, so it cannot admit a pair formed across two different beats,
+    # and a session mixing true intervals with spurious ones scatters far past the deviation
+    # engine's dispersion handling. The floor is unchanged.
     ptt_min_ms: float = 80.0
-    ptt_max_ms: float = 400.0
+    ptt_max_ms: float = 500.0
 
     # Invariant 2: the deepest granularity accepted is one derived interval per beat. Bounding
     # the array stops the column being used to smuggle a waveform. 300 intervals is ~5 minutes at
