@@ -243,6 +243,66 @@ def test_confidence_saturates(deviation_settings) -> None:
     assert saturated == pytest.approx(beyond)
 
 
+def test_lowering_the_beat_floor_does_not_raise_the_score(deviation_settings) -> None:
+    """The saturation point is an absolute count, not a multiple of the minimum.
+
+    `saturation` was `min_usable_beats * 2.0`. Dropping the floor from 30 to 12 would have moved
+    the saturation point from 60 beats to 24, so a 24-beat capture would have scored full marks on
+    the beat term where it previously scored 0.4. Lowering a gate is a decision about what to
+    accept; it must not silently become a decision to describe what it accepts more confidently.
+    """
+    quality = {"snr_db": 16.0, "motion_index": 0.05, "dropped_frame_pct": 1.0}
+
+    at_old_floor = compute_confidence(
+        n_usable_beats=24, quality=quality, min_usable_beats=30, settings=deviation_settings
+    )
+    at_new_floor = compute_confidence(
+        n_usable_beats=24, quality=quality, min_usable_beats=12, settings=deviation_settings
+    )
+    assert at_old_floor == pytest.approx(at_new_floor)
+
+    # And it is still short of saturation at 24 beats, which is the point.
+    full = compute_confidence(
+        n_usable_beats=60, quality=quality, min_usable_beats=12, settings=deviation_settings
+    )
+    assert full > at_new_floor
+
+
+def test_a_session_at_the_new_floor_scores_low(deviation_settings) -> None:
+    """A 12-beat trimmed mean is noisier than a 60-beat one, and the score has to say so.
+
+    This is where the cost of the lower gate is carried. Refusing the capture outright was not the
+    conservative choice: it produced no record at all rather than a weak one.
+    """
+    quality = {"snr_db": 16.0, "motion_index": 0.05, "dropped_frame_pct": 1.0}
+    minimal = compute_confidence(
+        n_usable_beats=12, quality=quality, min_usable_beats=12, settings=deviation_settings
+    )
+    full = compute_confidence(
+        n_usable_beats=60, quality=quality, min_usable_beats=12, settings=deviation_settings
+    )
+    assert minimal < full
+    assert minimal >= deviation_settings.confidence_floor
+
+
+def test_the_floor_matches_the_ml_reference() -> None:
+    """MIN_PAIRS in the ML team's tera_ptt.py, and the handset's own gate.
+
+    It was 30 here and 12 there, so a capture the signal chain accepted at 12-29 pairs was refused
+    on ingest as `insufficient_beats` — a second, stricter gate behind the validated one.
+    """
+    assert get_settings().deviation.min_usable_beats == 12
+
+
+def test_a_short_capture_still_produces_a_session_ptt(deviation_settings) -> None:
+    """Trimming must not fall over on the smaller arrays the lower floor now admits."""
+    twelve = [240.0 + (i % 5) for i in range(12)]
+    result = trimmed_session_ptt(twelve, deviation_settings)
+    assert result.n_considered == 12
+    assert 1 <= result.n_retained <= 12
+    assert 200.0 < result.value_ms < 280.0
+
+
 def test_confidence_handles_a_missing_quality_field(deviation_settings) -> None:
     """A missing metric is treated as the worst case, not ignored (invariant 7)."""
     result = compute_confidence(

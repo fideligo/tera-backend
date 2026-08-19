@@ -69,10 +69,29 @@ class DeviationSettings(BaseSettings):
     # drifts past `max_ptt_drift_ms` from it — and that recalibration is prompted at four weeks.
     min_calibration_sessions: int = 1
 
-    # Minimum usable beats for a session to yield an estimate. A 60 s capture at 60 bpm gives
-    # ~60 beats; requiring 30 means at least half the capture survived the quality gate.
-    # Engineering choice for this build. Per-episode override: protocol_params.min_beat_count.
-    min_usable_beats: int = 30
+    # Minimum usable beats for a session to yield an estimate.
+    #
+    # **Source: the ML team's `MIN_PAIRS = 12` in `final_round/ptt/tera_ptt.py`** — "beats needed
+    # for a usable median". That is the figure the chain was validated against, and it is the
+    # figure the handset's own gate has always used; the reference vectors in
+    # `patient/test/fixtures/` are checked against a Python run that accepts at 12.
+    #
+    # **This was 30, which was a second and stricter gate sitting behind the first.** The stated
+    # reasoning was that a 60 s capture at 60 bpm gives ~60 beats, so 30 means half the capture
+    # survived — a sound-sounding rule that was never validated and was not the reference's. Its
+    # effect was that a capture the ML chain accepts at 12-29 pairs was refused here as
+    # `insufficient_beats`, with the patient told to record again for a minute they had already
+    # given usably. Half of a 60 bpm capture is also not half of a 48 bpm one, so the rule was
+    # harshest on the slowest heart rates.
+    #
+    # A trimmed mean over 12 beats is noisier than over 30, and that cost is real. It is carried
+    # where it belongs: `compute_confidence` scores a 12-beat session low, and the trend it feeds
+    # is a direction rather than a claim. Refusing the capture outright was not the conservative
+    # choice — it produced no record at all rather than a weak one, which is worse for a product
+    # whose value proposition is record completeness.
+    #
+    # Per-episode override: protocol_params.min_beat_count.
+    min_usable_beats: int = 12
 
     # Confidence is a documented heuristic, never a claim of clinical accuracy (BUILD_SPEC 4.3).
     # It is capped strictly below 1.0 so no response can read as certainty.
@@ -96,7 +115,18 @@ class DeviationSettings(BaseSettings):
     confidence_quality_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     # Beat count stops adding confidence at twice the minimum. Beyond that the limiting factor
     # is signal quality, not sample size. Engineering choice for this build.
-    confidence_beat_saturation_multiple: float = 2.0
+    # **An absolute beat count, not a multiple of the minimum, and the difference matters.**
+    #
+    # This was `min_usable_beats * 2.0`. That tied the point at which more beats stop improving
+    # the score to the point at which a session is allowed at all — two unrelated facts. Dropping
+    # the floor from 30 to 12 would have dragged the saturation point from 60 beats to 24, so a
+    # 24-beat capture would score full marks on the beat term where it previously scored 0.4.
+    # Lowering a gate is a decision about what to accept; it must not silently become a decision
+    # to describe what it accepts more confidently.
+    #
+    # 60 beats is a full 60-second capture at 60 bpm, which is what the old default worked out to
+    # and is the honest reading of "more beats past here do not make the estimate better".
+    confidence_beat_saturation_beats: int = 60
     # SNR range over which the quality term moves from 0 to 1. Below the floor the pulse is not
     # separable from noise; above the ceiling more SNR does not make the fiducial point easier
     # to locate. Engineering choices, in the dB units the device gate reports.

@@ -178,8 +178,10 @@ def compute_confidence(
     BUILD_SPEC 4.3: "Do not invent a formula that implies clinical accuracy — keep it simple,
     documented, and clearly a heuristic." So:
 
-    * **Beat term** rises linearly with usable beats and saturates at a configured multiple of
-      the minimum. More beats past that point do not make the estimate better.
+    * **Beat term** rises linearly with usable beats and saturates at a configured absolute
+      count. More beats past that point do not make the estimate better. It is deliberately not
+      a multiple of ``min_usable_beats``: where the gate is set and where extra signal stops
+      helping are unrelated, and tying them meant lowering the gate quietly raised the score.
     * **Quality term** is the *worst* of the SNR, motion and dropped-frame sub-scores, not their
       average. Averaging would let a good SNR hide a capture ruined by motion; taking the worst
       limb is the escalation-biased choice (invariant 7).
@@ -189,7 +191,12 @@ def compute_confidence(
     This number orders sessions by how much the signal supported the reading. It is not a
     probability, not a confidence interval, and carries no clinical accuracy claim.
     """
-    saturation = max(1.0, min_usable_beats * settings.confidence_beat_saturation_multiple)
+    # The larger of the configured saturation count and the floor in force. A deployment that
+    # demanded more beats than the saturation point would otherwise saturate every session it
+    # accepted, which would make the beat term constant and therefore useless.
+    saturation = max(
+        1.0, float(settings.confidence_beat_saturation_beats), float(min_usable_beats)
+    )
     beat_score = _clamp(n_usable_beats / saturation, 0.0, 1.0)
 
     snr_span = settings.confidence_snr_db_ceiling - settings.confidence_snr_db_floor

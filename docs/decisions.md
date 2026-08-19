@@ -1792,3 +1792,76 @@ refuse, and it failed the moment the axis was added on the handset side alone.
 Nothing else about the ML handover reached the backend: the chain runs on the handset (invariant 2),
 so what crosses the wire is still one derived interval per beat and a quality block. The full
 reasoning is in `tera-mobile/docs/decisions.md`.
+
+## The beat floor, on both sides at once
+
+`minUsableBeats` was 30 on the handset and `min_usable_beats` was 30 on the server, while the ML
+reference's `MIN_PAIRS` — the figure `qualityGate` actually applies, and the one the reference
+vectors are validated against — is 12. So a capture with 12 to 29 paired beats passed the signal
+chain and was then refused one branch later as `insufficient_beats`. A recording the chain had
+accepted was thrown away, and the patient was asked to sit through another minute.
+
+Both are now 12.
+
+### Why changing one would have been worse than changing neither
+
+The server enforces the same floor in `plausibility.py`: a completed session with fewer usable beats
+than `min_usable_beats` is refused on ingest. Lowering only the handset's copy would not have let
+those captures through — it would have moved the refusal from the phone to the server, after the
+submit, which is a slower way to tell someone the same no.
+
+**Nothing enforces that the two agree.** The comment on the Dart constant claimed a "threshold
+cross-check at device-profile time" reconciles them. There is no such check: no endpoint publishes
+the server's thresholds and nothing compares them. That claim has been removed rather than left to
+mislead the next person, and it is how the two came to sit at 30 while the chain between them ran
+at 12.
+
+`ptt_reference_test.dart` now asserts `minUsableBeats <= minPairs` — the pipeline may not refuse a
+capture its own gate accepted. An inequality rather than an equality because the two count slightly
+different things (paired beats versus intervals surviving the plausibility window); a second gate is
+allowed to exist, it is just not allowed to be stricter by accident.
+
+### The old rule was never validated
+
+"A 60 s capture at 60 bpm gives ~60 beats; requiring 30 means at least half the capture survived."
+That reads well and rests on nothing. Half of a 60 bpm capture is not half of a 48 bpm one, so the
+rule fell hardest on the slowest heart rates — and a resting bradycardic patient is not producing a
+worse signal, only fewer beats of it.
+
+A trimmed mean over 12 beats **is** noisier than over 30, and that is a real cost. It is now carried
+where it belongs: `compute_confidence` scores a 12-beat session low, and what the session feeds is a
+direction rather than a claim. Refusing outright was not the conservative choice — it produced no
+record at all rather than a weak one, and record completeness is the product's stated value
+proposition.
+
+### The change that would have ridden along invisibly
+
+`compute_confidence` computed `saturation = min_usable_beats * confidence_beat_saturation_multiple`,
+with the multiple at 2.0 — so 60 beats with the old floor. Dropping the floor to 12 would have
+dragged the saturation point to **24**, and a 24-beat capture would have scored full marks on the
+beat term where it previously scored 0.4.
+
+That is a lowered gate quietly becoming a raised score, which is the opposite of what lowering a
+gate should mean. The two facts were only ever coincidentally related: where the gate sits is a
+decision about what to accept, and where extra beats stop helping is a fact about signal.
+
+`confidence_beat_saturation_multiple` is replaced by `confidence_beat_saturation_beats = 60` — a
+full 60-second capture at 60 bpm, which is what the old default worked out to. The formula takes the
+greater of that and the floor in force, so a deployment demanding more beats than the saturation
+point does not end up saturating every session it accepts and making the term constant.
+
+`test_lowering_the_beat_floor_does_not_raise_the_score` pins it: 24 beats scores the same whether
+the floor is 30 or 12.
+
+### Nothing overflows at the smaller sizes
+
+Checked rather than assumed, since the request specifically raised it. `trimmed_session_ptt` already
+guards every small-array case — it raises on empty, returns the plain mean below four values where
+a quartile is undefined, and falls back to the full set when a degenerate IQR would leave the
+retained list empty. At 12 values the Tukey fence is well defined.
+`test_a_short_capture_still_produces_a_session_ptt` covers it. The upper bound,
+`max_ptt_array_length = 300`, is untouched; lowering a minimum cannot reach it.
+
+### Counts
+
+391 backend tests (387 before), 410 Flutter (409 before), 0 analyzer errors.
